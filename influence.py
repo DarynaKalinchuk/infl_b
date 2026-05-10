@@ -1,10 +1,12 @@
 from datasets import load_from_disk
 from transformers import AutoTokenizer
+import time
 
 
 from utils import *
 from postprocess_utils import *
 from inf_est_methods import *
+from tqdm.auto import tqdm
 
 
 import pickle
@@ -49,15 +51,18 @@ if __name__ == '__main__':
     metrics_filename = f"{args.dataset}_{args.model}_{args.hvp_cal}_acc_cov.json".replace(" ", "_")
     metrics_path = os.path.join(results_dir, metrics_filename)
 
+    quantization_config = None
+    base_model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config, device_map='auto')
+
 
     if args.hvp_cal == "ekfac":
         # these are from sbatch file
         HVP_METHOD="ekfac"
         INF_ARGS="lambda_const_param=0.01,n_iteration=10,alpha_const=1."
 
-        model = AutoModelForCausalLM.from_pretrained(model_name, device_map='auto')
+        
         model = PeftModel.from_pretrained(
-            model,
+            base_model,
             "lora_adapter/" + core_path
         )
 
@@ -107,9 +112,9 @@ if __name__ == '__main__':
 
     elif "rep" in args.hvp_cal and "sim" in args.hvp_cal:
 
-        model = AutoModelForCausalLM.from_pretrained(model_name, device_map='auto')
+        
         model = PeftModel.from_pretrained(
-            model,
+            base_model,
             "lora_adapter/" + core_path
         )
         model.eval()
@@ -152,9 +157,9 @@ if __name__ == '__main__':
         checkpoint_paths = sorted(
             glob.glob(os.path.join(ckpt_root, "checkpoint-*")),
             key=lambda x: int(x.split("-")[-1])
-        )[:1]
+        ) # [:1] for testing just the 1 check point
 
-        checkpoint_gradients = []
+
 
         tokenized_tr = get_preprocessed_dataset(
             tokenizer, dataset["train"], chat_template, max_length=args.max_length
@@ -163,16 +168,19 @@ if __name__ == '__main__':
             tokenizer, dataset["test"], chat_template, max_length=args.max_length
         )
 
-        for ckpt_path in checkpoint_paths:
+        influence_inf = None
+
+        for ckpt_path in tqdm(checkpoint_paths, desc="Checkpoints"):
             print(f"Collecting gradients for {ckpt_path}")
 
-            tr_grad_dict, val_grad_dict, model = collect_gradient( # to be fixed `model`!
-                model_name,
-                ckpt_path,
+            
+            model = PeftModel.from_pretrained(base_model, ckpt_path, is_trainable=True)
+
+            tr_grad_dict, val_grad_dict = collect_gradient( 
+                model,
                 tokenizer,
                 tokenized_tr,
-                tokenized_val,
-                return_model=True,
+                tokenized_val
             )
 
             optimizer_path = os.path.join(ckpt_path, "optimizer.pt")
@@ -181,8 +189,8 @@ if __name__ == '__main__':
             state = optimizer_state["state"]
             param_groups = optimizer_state["param_groups"]
 
-            trainable_names = [
-                n for n, p in model.named_parameters()
+            trainable_params = [
+                (n, p) for n, p in model.named_parameters()
                 if p.requires_grad
             ]
 
@@ -190,31 +198,46 @@ if __name__ == '__main__':
             for group in param_groups:
                 param_ids.extend(group["params"])
 
-            assert len(trainable_names) == len(param_ids), (
-                len(trainable_names), len(param_ids)
-            )
+            assert len(trainable_params) == len(param_ids)
 
             adam_optimizer_state = {}
 
-            for name, pid in zip(trainable_names, param_ids):
+            for (name, p), pid in zip(trainable_params, param_ids):
+                if state[pid]["exp_avg"].shape != p.shape:
+                    raise ValueError(
+                        f"Mismatch: {name}, opt={state[pid]['exp_avg'].shape}, param={p.shape}"
+                    )
+
                 adam_optimizer_state[name] = {
                     "step": state[pid]["step"],
                     "exp_avg": state[pid]["exp_avg"],
                     "exp_avg_sq": state[pid]["exp_avg_sq"],
                 }
 
+            del model
+            torch.cuda.empty_cache()
             eta = 5e-5
 
-            checkpoint_gradients.append(
-                (eta, tr_grad_dict, val_grad_dict, adam_optimizer_state)
+            checkpoint_gradients = (eta, tr_grad_dict, val_grad_dict, adam_optimizer_state)
+            
+
+            print("Estimating TracIn influence for this checkpoint...")
+            start = time.perf_counter()
+
+            checkpoint_influence = TracIn_Adam(
+                checkpoint_gradients,
+                beta1=0.9,
+                beta2=0.999,
+                eps=1e-8,
             )
 
-        influence_inf = TracIn_Adam(
-            checkpoint_gradients,
-            beta1=0.9,
-            beta2=0.999,
-            eps=1e-8,
-        )
+            if influence_inf is None:
+                influence_inf = checkpoint_influence
+            else:
+                influence_inf += checkpoint_influence
+
+            elapsed = time.perf_counter() - start
+            print(f"TracIn_Adam took {elapsed:.2f} seconds")
 
     else:
 
@@ -232,7 +255,11 @@ if __name__ == '__main__':
             print('collecting grad...')
             tokenized_tr = get_preprocessed_dataset(tokenizer, dataset['train'], chat_template, max_length=args.max_length)
             tokenized_val = get_preprocessed_dataset(tokenizer, dataset['test'], chat_template, max_length=args.max_length)
-            tr_grad_dict, val_grad_dict = collect_gradient(model_name, "lora_adapter/" + core_path, tokenizer, tokenized_tr, tokenized_val)
+            
+            
+            model = PeftModel.from_pretrained(base_model, "lora_adapter/" + core_path, is_trainable=True)
+            
+            tr_grad_dict, val_grad_dict = collect_gradient(model, tokenizer, tokenized_tr, tokenized_val)
             with open(tr_grad_file, 'wb') as f:
                 pickle.dump(tr_grad_dict, f)
             with open(val_grad_file, 'wb') as f:
@@ -244,11 +271,11 @@ if __name__ == '__main__':
 
         influence_inf = gradient_influence_estimation(tr_grad_dict, val_grad_dict, hvp_cal=args.hvp_cal, hyperparams = inf_args_map)
 
-    # cache_dir = 'cache/' + args.model + '/'
-    # os.makedirs(cache_dir, exist_ok=True)
-    # influence_inf.to_csv(cache_dir + args.dataset + '_' + str(args.epochs) + args.hvp_cal + '.csv', index_label=False)
-    # check_acc_cov(influence = influence_inf, train_dataset = dataset['train'], 
-    #               validation_dataset = dataset['test'], 
-    #               metrics_path = metrics_path)
+    cache_dir = 'cache/' + args.model + '/'
+    os.makedirs(cache_dir, exist_ok=True)
+    influence_inf.to_csv(cache_dir + args.dataset + '_' + str(args.epochs) + args.hvp_cal + '.csv', index_label=False)
+    check_acc_cov(influence = influence_inf, train_dataset = dataset['train'], 
+                  validation_dataset = dataset['test'], 
+                  metrics_path = metrics_path)
 
 

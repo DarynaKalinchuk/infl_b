@@ -228,61 +228,108 @@ import torch
 import pandas as pd
 
 
+from collections import defaultdict
+import torch
+import torch.nn.functional as F
+import pandas as pd
+
+
 def TracIn_Adam(
     checkpoint_gradients,
     beta1=0.9,
     beta2=0.999,
     eps=1e-8,
+    device="cuda",
 ):
-    IF_dict = defaultdict(dict)
 
-    for eta, tr_grad_dict, val_grad_dict, adam_optimizer_state in checkpoint_gradients:
+    train_ids = None
+    val_ids = None
 
-        gamma_dict = defaultdict(dict)
+    def align_shape(x, target):
+        if x.shape == target.shape:
+            return x
+        if x.T.shape == target.shape:
+            return x.T
+        raise ValueError(f"Shape mismatch: {x.shape} vs {target.shape}")
 
-        for tr_id, param_grads in tr_grad_dict.items():
-            for weight_name, g in param_grads.items():
+    def flatten_grad_dict(example_grad_dict, param_order):
+        parts = []
+        for name in param_order:
+            g = example_grad_dict[name]
+            parts.append(g.reshape(-1))
+        return torch.cat(parts)
 
-                exp_avg = adam_optimizer_state[weight_name]["exp_avg"].to(g.device)
-                exp_avg_sq = adam_optimizer_state[weight_name]["exp_avg_sq"].to(g.device)
+    eta, tr_grad_dict, val_grad_dict, adam_optimizer_state = checkpoint_gradients
 
-                assert exp_avg.shape == g.shape, (weight_name, exp_avg.shape, g.shape)
+    train_ids = list(tr_grad_dict.keys())
+    val_ids = list(val_grad_dict.keys())
 
-                updated_avg = beta1 * exp_avg + (1 - beta1) * g
-                updated_avg_sq = beta2 * exp_avg_sq + (1 - beta2) * (g ** 2)
+    # Use only params present in both train and val gradients
+    param_order = [
+        name for name in next(iter(tr_grad_dict.values())).keys()
+        if name in next(iter(val_grad_dict.values()))
+    ]
 
-                gamma_dict[tr_id][weight_name] = updated_avg / torch.sqrt(
-                    updated_avg_sq + eps
-                )
+    # Build raw gradient matrices
+    G_train = torch.stack([
+        flatten_grad_dict(tr_grad_dict[tr_id], param_order)
+        for tr_id in train_ids
+    ]).to(device)
 
-        for tr_id in tr_grad_dict:
-            for val_id in val_grad_dict:
+    G_val = torch.stack([
+        flatten_grad_dict(val_grad_dict[val_id], param_order)
+        for val_id in val_ids
+    ]).to(device)
 
-                device = next(iter(val_grad_dict[val_id].values())).device
+    # Flatten Adam state in the same parameter order
+    m_parts = []
+    v_parts = []
 
-                dot = torch.tensor(0.0, device=device)
-                norm_val = torch.tensor(0.0, device=device)
-                norm_gamma = torch.tensor(0.0, device=device)
+    for name in param_order:
+        ref = next(iter(tr_grad_dict.values()))[name]
 
-                for weight_name, g_val in val_grad_dict[val_id].items():
-                    if weight_name not in gamma_dict[tr_id]:
-                        continue
+        m = adam_optimizer_state[name]["exp_avg"]
+        v = adam_optimizer_state[name]["exp_avg_sq"]
 
-                    gamma = gamma_dict[tr_id][weight_name].to(g_val.device)
+        m = align_shape(m, ref)
+        v = align_shape(v, ref)
 
-                    dot += torch.sum(g_val * gamma)
-                    norm_val += torch.sum(g_val * g_val)
-                    norm_gamma += torch.sum(gamma * gamma)
+        m_parts.append(m.reshape(-1))
+        v_parts.append(v.reshape(-1))
 
-                cos_sim = dot / (
-                    torch.sqrt(norm_val) * torch.sqrt(norm_gamma) + 1e-12
-                )
+    m = torch.cat(m_parts).to(device)
+    v = torch.cat(v_parts).to(device)
 
-                IF_dict[tr_id][val_id] = (
-                    IF_dict[tr_id].get(val_id, 0.0) + eta * cos_sim.item()
-                )
+    # Adam-precondition both train and validation gradients
+    G_train = (beta1 * m + (1 - beta1) * G_train) / torch.sqrt(
+        beta2 * v + (1 - beta2) * G_train.pow(2) + eps
+    )
 
-    return pd.DataFrame(IF_dict, dtype=float)
+    G_val = (beta1 * m + (1 - beta1) * G_val) / torch.sqrt(
+        beta2 * v + (1 - beta2) * G_val.pow(2) + eps
+    )
+
+    # Cosine similarity, matching normalized LESS-style scoring
+    G_train = F.normalize(G_train, dim=1)
+    G_val = F.normalize(G_val, dim=1)
+
+    # Shape: [N_train, N_val]
+    scores = -eta * (G_train @ G_val.T)
+
+
+    del G_train, G_val
+    torch.cuda.empty_cache()
+
+    df = pd.DataFrame(
+        scores.T.detach().cpu().numpy(),
+        index=val_ids,
+        columns=train_ids,
+        dtype=float,
+    )
+
+    print(df.shape)
+
+    return df
 
 
 """

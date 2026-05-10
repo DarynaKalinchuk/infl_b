@@ -26,14 +26,8 @@ def get_preprocessed_dataset(tokenizer, dataset, chat_template, max_length):
 
     return dataset.map(tokenized_dataset, batched=True, remove_columns=['text'])
 
-def collect_gradient(model_name, lora_adapter_path, tokenizer, tokenized_tr, tokenized_val):
-    # quantization_config = BitsAndBytesConfig(load_in_8bit=True, load_in_4bit=False)
-    quantization_config = None
-    model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config, device_map='auto')
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    tokenizer.padding_side = 'left'
-    tokenizer.pad_token = tokenizer.eos_token
-    model = PeftModel.from_pretrained(model, lora_adapter_path, is_trainable=True)
+def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
+
     
     collate_fn = lambda x: tokenizer.pad(x, padding="longest", return_tensors="pt")
     train_dataloader_stochastic = DataLoader(tokenized_tr, 
