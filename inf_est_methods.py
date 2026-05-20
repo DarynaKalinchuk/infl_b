@@ -176,13 +176,12 @@ def gradient_influence_estimation(
         scores = -eta * (G_val @ G_train.T)
 
     elif hvp_cal == "GradCos":
-        dots = G_val @ G_train.T
         val_norms = torch.linalg.norm(G_val, dim=1, keepdim=True)
         tr_norms = torch.linalg.norm(G_train, dim=1, keepdim=True).T
-        scores = -(dots / (val_norms * tr_norms + 1e-12))
+        scores = -(G_val @ G_train.T / (val_norms * tr_norms + 1e-12))
 
     elif hvp_cal == "DataInf":
-        # DataInf needs lambda per parameter block to match your original logic.
+
         hvp_parts = []
 
         for weight_name in tqdm(param_order):
@@ -209,6 +208,91 @@ def gradient_influence_estimation(
 
         H_val = torch.cat(hvp_parts, dim=1)
         scores = -(H_val @ G_train.T)
+
+        del H_val, hvp_parts
+
+    elif hvp_cal == "thetaRelatIF":
+
+        hvp_parts = []
+        train_hvp_parts = []
+
+        for weight_name in tqdm(param_order):
+            Gt = torch.stack([
+                tr_grad_dict[tr_id][weight_name].reshape(-1)
+                for tr_id in train_ids
+            ]).to(device)
+
+            Gv = torch.stack([
+                val_grad_dict[val_id][weight_name].reshape(-1)
+                for val_id in val_ids
+            ]).to(device)
+
+            lambda_const = Gt.pow(2).mean(dim=1).mean() / lambda_const_param
+
+            denom = lambda_const + Gt.pow(2).sum(dim=1)          # [N_train]
+            C_val = (Gv @ Gt.T) / denom.unsqueeze(0)
+            hvp_val = Gv / lambda_const - (C_val @ Gt) / (n_train * lambda_const)
+
+            C_train = (Gt @ Gt.T) / denom.unsqueeze(0)
+            hvp_train = Gt / lambda_const - (C_train @ Gt) / (n_train * lambda_const)
+
+            hvp_parts.append(hvp_val)
+            train_hvp_parts.append(hvp_train)
+
+        H_val = torch.cat(hvp_parts, dim=1)
+        H_train = torch.cat(train_hvp_parts, dim=1)
+
+
+        scores = -(H_val @ G_train.T)
+
+        train_norms = H_train.norm(dim=1)   # ||H^{-1} g_i||, norm of val grad is ommited since we care only about ranking
+
+        scores = scores / (train_norms.unsqueeze(0) + 1e-12)
+
+        del H_val, hvp_parts
+
+    elif hvp_cal == "lRelatIF":
+
+        hvp_parts = []
+        train_hvp_parts = []
+
+        for weight_name in tqdm(param_order):
+            Gt = torch.stack([
+                tr_grad_dict[tr_id][weight_name].reshape(-1)
+                for tr_id in train_ids
+            ]).to(device)
+
+            Gv = torch.stack([
+                val_grad_dict[val_id][weight_name].reshape(-1)
+                for val_id in val_ids
+            ]).to(device)
+
+            lambda_const = Gt.pow(2).mean(dim=1).mean() / lambda_const_param
+
+            denom = lambda_const + Gt.pow(2).sum(dim=1)          # [N_train]
+            C_val = (Gv @ Gt.T) / denom.unsqueeze(0)
+            hvp_val = Gv / lambda_const - (C_val @ Gt) / (n_train * lambda_const)
+
+            C_train = (Gt @ Gt.T) / denom.unsqueeze(0)
+            hvp_train = Gt / lambda_const - (C_train @ Gt) / (n_train * lambda_const)
+
+            hvp_parts.append(hvp_val)
+            train_hvp_parts.append(hvp_train)
+
+        H_val = torch.cat(hvp_parts, dim=1)
+        H_train = torch.cat(train_hvp_parts, dim=1)
+
+
+        scores = -(H_val @ G_train.T)
+
+        self_influence = torch.abs(torch.diag(H_train @ G_train.T))
+
+        scores = scores / (
+            torch.sqrt(self_influence).unsqueeze(0) + 1e-12
+        )
+
+        print(f"scores shape: {scores.shape}")
+        print(f"self_influence shape: {self_influence.shape}")
 
         del H_val, hvp_parts
 
