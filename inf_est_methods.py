@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from collections import defaultdict
-
+from utils import *
 import json
 
 
@@ -118,6 +118,8 @@ def random_influence_estimation(dataset, metrics_path):
 def gradient_influence_estimation(
     tr_grad_dict,
     val_grad_dict,
+    train_dataloader_stochastic,
+    model,
     hvp_cal="DataInf",
     hyperparams=None,
     device="cuda",
@@ -244,6 +246,7 @@ def gradient_influence_estimation(
 
         del H_val, hvp_parts
 
+    
     elif hvp_cal == "Original":
         hvp_parts = []
 
@@ -277,71 +280,6 @@ def gradient_influence_estimation(
 
         del H_val, hvp_parts
         
-    elif hvp_cal == "FastIF":
-        hvp_parts = []
-
-        batch_size = int(hyperparams.get("batch_size", 1))
-        repeat = int(hyperparams.get("repeat", 4))
-
-        for weight_name in tqdm(param_order):
-
-            Gt = torch.stack([
-                tr_grad_dict[tr_id][weight_name].reshape(-1)
-                for tr_id in train_ids
-            ]).to(device)
-
-            Gv = torch.stack([
-                val_grad_dict[val_id][weight_name].reshape(-1)
-                for val_id in val_ids
-            ]).to(device)
-
-            lambda_const = (
-                Gt.pow(2).mean(dim=1).mean()
-                / lambda_const_param
-            )
-
-            estimates = []
-
-            for _ in range(repeat):
-
-                running_hvp = Gv.clone()
-
-                for _ in range(n_iteration):
-
-                    idx = torch.randint(
-                        0,
-                        n_train,
-                        (batch_size,),
-                        device=device
-                    )
-
-                    G_batch = Gt[idx]
-
-                    dots = running_hvp @ G_batch.T
-
-                    hv = (dots @ G_batch) / batch_size
-
-                    # FastIF = stochastic LiSSA recursion
-                    running_hvp = (
-                        Gv
-                        + (1 - lambda_const) * running_hvp
-                        - alpha_const * hv
-                    )
-
-                estimates.append(running_hvp)
-
-            running_hvp = torch.stack(estimates).mean(dim=0)
-
-            hvp_parts.append(running_hvp)
-
-            del Gt, Gv, running_hvp, estimates
-
-        H_val = torch.cat(hvp_parts, dim=1)
-
-        scores = -(H_val @ G_train.T)
-
-        del H_val, hvp_parts
-
     else:
         raise Exception("Invalid hvp calculation option.")
 

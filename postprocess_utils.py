@@ -280,7 +280,7 @@ def plot_all_acc_cov(results_dir="results", figsize_per_subplot=(8, 6)):
         cbar.set_ticklabels([f"{t * 100:.0f}%" for t in ticks])
 
     plt.savefig(
-        os.path.join(results_dir, "acc_cov_all_in_one2.png"),
+        os.path.join(results_dir, "acc_cov_all_in_one.png"),
         bbox_inches="tight"
     )
 

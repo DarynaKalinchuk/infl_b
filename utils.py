@@ -230,4 +230,3 @@ def get_eta_from_trainer_state(ckpt_path):
 
     raise ValueError(f"No exact learning rate found for checkpoint step {step}")
 
-

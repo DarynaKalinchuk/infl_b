@@ -52,7 +52,8 @@ if __name__ == '__main__':
     metrics_path = os.path.join(results_dir, metrics_filename)
 
     quantization_config = None
-    base_model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config, device_map='auto')
+    base_model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config, 
+                                                      device_map='auto', attn_implementation="eager")
 
     start_time = time.time()
     
@@ -219,7 +220,10 @@ if __name__ == '__main__':
         item.split('=') for item in (args.inf_args.split(',') if args.inf_args else [])
         )
 
-        influence_inf = gradient_influence_estimation(tr_grad_dict, val_grad_dict, hvp_cal=args.hvp_cal, hyperparams = inf_args_map)
+        influence_inf = gradient_influence_estimation(tr_grad_dict = tr_grad_dict, 
+                                                      val_grad_dict = val_grad_dict,
+                                                      hvp_cal=args.hvp_cal, 
+                                                      hyperparams = inf_args_map)
 
     end_time = time.time()
 
