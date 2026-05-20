@@ -118,8 +118,6 @@ def random_influence_estimation(dataset, metrics_path):
 def gradient_influence_estimation(
     tr_grad_dict,
     val_grad_dict,
-    train_dataloader_stochastic,
-    model,
     hvp_cal="DataInf",
     hyperparams=None,
     device="cuda",
