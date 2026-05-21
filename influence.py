@@ -48,7 +48,7 @@ if __name__ == '__main__':
     # results statistics directory
     results_dir = "results"
     os.makedirs(results_dir, exist_ok=True)
-    metrics_filename = f"{args.dataset}_{args.model}_{args.hvp_cal}_acc_cov.json".replace(" ", "_")
+    metrics_filename = f"{args.dataset}_{args.model}_{args.hvp_cal}_metrics_results.json".replace(" ", "_")
     metrics_path = os.path.join(results_dir, metrics_filename)
 
     quantization_config = None
