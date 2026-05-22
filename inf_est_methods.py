@@ -9,10 +9,10 @@ import json
 
 
 
-def similarity_influence_estimation(test_vec, train_vecs, hvp_cal = "rep_cos_sim"):
-    rep_cos_sim = lambda a, b: np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-    rep_dot_sim = lambda a, b: np.dot(a, b)
-    rep_euc_sim = lambda a, b: -np.linalg.norm(a - b)**2
+def similarity_influence_estimation(test_vec, train_vecs, hvp_cal = "RepEucSim"):
+    RepCosSim = lambda a, b: np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+    RepDotSim = lambda a, b: np.dot(a, b)
+    RepEucSim = lambda a, b: -np.linalg.norm(a - b)**2
 
     sim_fn = locals().get(hvp_cal)
     if sim_fn is None:

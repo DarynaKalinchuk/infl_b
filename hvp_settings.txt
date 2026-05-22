@@ -1,12 +1,7 @@
 TracIn
-GradDot
 GradCos
-rep_cos_sim
-rep_dot_sim
-rep_euc_sim
 LiSSA
 DataInf
 Original
-random
 thetaRelatIF
-lRelatif
+lRelatIF

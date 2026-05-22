@@ -38,13 +38,19 @@ def run_benchmark_measures(
     n = len(validation_dataset)
 
     overall = {
-    field: {"acc": 0, "cov": 0, "auc": 0}
-    for field in fields
+        field: {"acc": 0, "cov": 0, "auc": 0, "var_ratio": 0}
+        for field in fields
     }
 
     per_field = {
         field: defaultdict(
-            lambda: {"count": 0, "acc": 0, "cov": 0, "auc": 0}
+            lambda: {
+                "count": 0,
+                "acc": 0,
+                "cov": 0,
+                "auc": 0,
+                "var_ratio": 0,
+            }
         )
         for field in fields
     }
@@ -59,7 +65,20 @@ def run_benchmark_measures(
 
         for field in fields:
             val_label = validation_dataset[field][i]
-        
+
+            # Relevant-class mask
+            labels = (
+                np.array(train_dataset[field]) == val_label
+            ).astype(int)
+
+            relevant_scores = scores[labels == 1]
+
+            # Variance ratio
+            all_var = np.var(scores)
+            rel_var = np.var(relevant_scores)
+
+            var_ratio = rel_var / all_var if all_var > 0 else 0.0
+
             # Accuracy, Coverage
             stats = per_field[field][val_label]
             stats["count"] += 1
@@ -77,14 +96,14 @@ def run_benchmark_measures(
             stats["cov"] += cov_hits
 
             # AUC
-            labels = (
-                np.array(train_dataset[field]) == val_label
-            ).astype(int)
-
             auc = roc_auc_score(labels, scores)
 
             overall[field]["auc"] += auc
             stats["auc"] += auc
+
+            # Variance ratio aggregation
+            overall[field]["var_ratio"] += var_ratio
+            stats["var_ratio"] += var_ratio
 
     metrics = {
         "time_elapsed": time_elapsed,
@@ -96,6 +115,7 @@ def run_benchmark_measures(
             "accuracy": overall[field]["acc"] / n,
             "coverage": overall[field]["cov"] / (n * cov_cnt),
             "auc": overall[field]["auc"] / n,
+            "variance_ratio": overall[field]["var_ratio"] / n,
         }
 
         metrics[f"per_{field}"] = {
@@ -104,12 +124,17 @@ def run_benchmark_measures(
                 "accuracy": vals["acc"] / vals["count"],
                 "coverage": vals["cov"] / (vals["count"] * cov_cnt),
                 "auc": vals["auc"] / vals["count"],
+                "variance_ratio": vals["var_ratio"] / vals["count"],
             }
             for label, vals in per_field[field].items()
         }
 
         print(f"{field.title()} Acc:", metrics["overall"][field]["accuracy"])
         print(f"{field.title()} Cover:", metrics["overall"][field]["coverage"])
+        print(
+            f"{field.title()} VarRatio:",
+            metrics["overall"][field]["variance_ratio"],
+        )
 
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
@@ -117,7 +142,8 @@ def run_benchmark_measures(
     return metrics
 
 
-def plot_all_acc_cov(results_dir="results", figsize_scale=0.55, show=True):
+
+def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True):
 
     if not os.path.exists(results_dir):
         raise FileNotFoundError(
@@ -141,13 +167,13 @@ def plot_all_acc_cov(results_dir="results", figsize_scale=0.55, show=True):
             else stem
         )
 
-        exp = "_".join(parts[2:]) or "default"
+        exp = parts[2] 
 
         with open(os.path.join(results_dir, file)) as f:
             grouped[group].append((exp, json.load(f)))
 
-    metric_names = ["accuracy", "coverage", "auc", "time"]
-    metric_labels = ["Accuracy", "Coverage", "AUC", "Runtime"]
+    metric_names = ["accuracy", "coverage", "auc", "variance_ratio", "time"]
+    metric_labels = ["Accuracy", "Coverage", "AUC", "Var Ratio", "Runtime"]
     fields = ["variation", "subvariation"]
 
     figures = {}
@@ -236,16 +262,23 @@ def plot_all_acc_cov(results_dir="results", figsize_scale=0.55, show=True):
                     np.nan
                 )
 
+                values[row_idx, 3] = vals.get(
+                    "variance_ratio",
+                    np.nan
+                )
+
                 if variation.startswith("overall"):
-                    values[row_idx, 3] = metrics.get(
+                    values[row_idx, 4] = metrics.get(
                         "time_elapsed",
                         np.nan
                     )
 
         metric_norm = Normalize(0, 1)
 
-        finite_times = values[:, 3][
-            np.isfinite(values[:, 3])
+        time_col = metric_labels.index("Runtime")
+
+        finite_times = values[:, time_col][
+            np.isfinite(values[:, time_col])
         ]
 
         time_norm = Normalize(
@@ -268,7 +301,7 @@ def plot_all_acc_cov(results_dir="results", figsize_scale=0.55, show=True):
                     if np.isnan(v)
                     else cmap(
                         time_norm(v)
-                        if c == 3
+                        if c == time_col
                         else metric_norm(v)
                     )
                     for c, v in enumerate(row)
@@ -285,7 +318,7 @@ def plot_all_acc_cov(results_dir="results", figsize_scale=0.55, show=True):
                     ""
                     if np.isnan(v)
                     else f"{v:.2f}s"
-                    if c == 3
+                    if c == time_col
                     else f"{v * 100:.2f}%"
                     for c, v in enumerate(row)
                 ]

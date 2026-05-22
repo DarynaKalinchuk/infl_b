@@ -39,4 +39,4 @@ while read -r HVP_METHOD; do
 done < hvp_settings.txt
 
 
-python3 -c "from postprocess_utils import plot_all_acc_cov; plot_all_acc_cov()"
+python3 -c "from postprocess_utils import generate_table_metrics; generate_table_metrics()"

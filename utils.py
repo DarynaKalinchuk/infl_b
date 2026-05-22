@@ -190,17 +190,23 @@ class LanguageModelingTask(Task):
         total_modules = []
         num_layers = self.config['model']['num_layers']
 
-        if self.config['model']['family'] in ["llama"]:
+        if self.config['model']['family'] in ["olmo"]:
 
             for i in range(num_layers):
-                    total_modules.append(f"model.layers.{i}.mlp.gate_proj")
-                    total_modules.append(f"model.layers.{i}.mlp.up_proj")
-                    total_modules.append(f"model.layers.{i}.mlp.down_proj")
 
-                    total_modules.append(f"model.layers.{i}.self_attn.q_proj")
-                    total_modules.append(f"model.layers.{i}.self_attn.k_proj")
-                    total_modules.append(f"model.layers.{i}.self_attn.v_proj")
-                    total_modules.append(f"model.layers.{i}.self_attn.o_proj")  
+                total_modules.append(
+                    f"base_model.model.model.layers.{i}.self_attn.q_proj.lora_A.default"
+                )
+                total_modules.append(
+                    f"base_model.model.model.layers.{i}.self_attn.q_proj.lora_B.default"
+                )
+
+                total_modules.append(
+                    f"base_model.model.model.layers.{i}.self_attn.v_proj.lora_A.default"
+                )
+                total_modules.append(
+                    f"base_model.model.model.layers.{i}.self_attn.v_proj.lora_B.default"
+                )
 
         # elif 
         else:

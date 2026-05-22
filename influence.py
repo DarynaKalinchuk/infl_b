@@ -16,6 +16,8 @@ import sys
 import glob
 from huggingface_hub import login
 
+
+
 with open("TOKENS.txt", "r") as f:
     line = f.read().strip()
 
@@ -53,7 +55,7 @@ if __name__ == '__main__':
 
     quantization_config = None
     base_model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config, 
-                                                      device_map='auto', attn_implementation="eager")
+                                                      device_map='auto')
 
     start_time = time.time()
     
@@ -68,22 +70,10 @@ if __name__ == '__main__':
             "lora_adapter/" + core_path
         )
 
-        model = model.merge_and_unload()
-
-        # full fine-tuned model:
-        # 
-        # model_path = f"finetuned_model/{args.model}/{args.dataset}_{args.epochs}"
-
-        # model = AutoModelForCausalLM.from_pretrained(
-        #     model_path,
-        #     dtype=torch.float32,
-        # )
-        # model.config.use_cache = False    
-
-        
+               
         config = {
             "model": {
-                "family": "tinyllama",
+                "family": "olmo",
                 "num_layers": model.config.num_hidden_layers,
             }
         }
@@ -112,7 +102,7 @@ if __name__ == '__main__':
 
 
 
-    elif "rep" in args.hvp_cal and "sim" in args.hvp_cal:
+    elif "Sim" in args.hvp_cal:
 
         
         model = PeftModel.from_pretrained(
