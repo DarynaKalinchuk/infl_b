@@ -13,21 +13,6 @@
   },
   "download_size": 4911181,
   "features": {
-    "topic": {
-      "names": [
-        "cbrn_threats",
-        "copyright_ip_violations",
-        "csam_sex_crimes",
-        "defamation_libel_slander",
-        "espionage_hacking_doxing",
-        "fraud_scam_phishing",
-        "illegal_violent_crimes",
-        "other",
-        "privacy_pii_violations",
-        "self_harm_suicide"
-      ],
-      "_type": "ClassLabel"
-    },
     "variation": {
       "dtype": "string",
       "_type": "Value"
