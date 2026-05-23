@@ -59,40 +59,8 @@ if __name__ == '__main__':
 
     start_time = time.time()
     
-    if args.hvp_cal == "ekfac":
-        # these are from sbatch file
-        HVP_METHOD="ekfac"
-        INF_ARGS="lambda_const_param=0.01,n_iteration=10,alpha_const=1."
 
-        
-        model = PeftModel.from_pretrained(
-            base_model,
-            "lora_adapter/" + core_path
-        )
-
-               
-        config = {
-            "model": {
-                "family": "olmo",
-                "num_layers": model.config.num_hidden_layers,
-            }
-        }
-
-        scores = ekfac_influence_estimation(tokenizer,
-                                            model = model,
-                                            dataset = dataset,
-                                            config = config,
-                                            max_length = 128,
-                                            output_dir="results/EKFAC",
-                                            use_half_precision = False,
-                                            use_compile = False,
-                                            query_gradient_rank = -1,
-                                            save_id = True,
-                                            factor_strategy = "diagonal")
-
-        influence_inf = pd.DataFrame(-scores.cpu().numpy())
-
-    elif (args.hvp_cal == "random"):
+    if (args.hvp_cal == "random"):
 
         print(f"Calculating random influence...")
         
@@ -151,7 +119,7 @@ if __name__ == '__main__':
         checkpoint_paths = sorted(
             glob.glob(os.path.join(ckpt_root, "checkpoint-*")),
             key=lambda x: int(x.split("-")[-1])
-        ) # [:1] for testing just the 1 check point
+        )[:1] #for testing just the 1 check point
 
 
 
@@ -192,6 +160,57 @@ if __name__ == '__main__':
             else:
                 influence_inf += checkpoint_influence
 
+
+    elif args.hvp_cal == "TracInAdam":
+
+        print("Calculating TracInAdam...")
+
+        ckpt_root = "lora_adapter/" + core_path
+
+        checkpoint_paths = sorted(
+            glob.glob(os.path.join(ckpt_root, "checkpoint-*")),
+            key=lambda x: int(x.split("-")[-1])
+        )[:1] #for testing just the 1 check point
+
+
+
+        tokenized_tr = get_preprocessed_dataset(
+            tokenizer, dataset["train"], chat_template, max_length=args.max_length
+        )
+        tokenized_val = get_preprocessed_dataset(
+            tokenizer, dataset["test"], chat_template, max_length=args.max_length
+        )
+
+        influence_inf = None
+
+        for ckpt_path in tqdm(checkpoint_paths, desc="Checkpoints"):
+            print(f"Collecting gradients for {ckpt_path}")
+
+            
+            model = PeftModel.from_pretrained(base_model, ckpt_path, is_trainable=True)
+
+            tr_grad_dict, val_grad_dict = collect_gradient( 
+                model,
+                tokenizer,
+                tokenized_tr,
+                tokenized_val
+            )
+
+            
+            adamw_optimizer_state = load_adamw_optimizer_state(model, ckpt_path)
+
+
+            checkpoint_influence = gradient_influence_estimation(
+                tr_grad_dict=tr_grad_dict,
+                val_grad_dict=val_grad_dict,
+                hvp_cal="TracInAdam",
+                hyperparams={"adamw_optimizer_state": adamw_optimizer_state},
+            )
+
+            if influence_inf is None:
+                influence_inf = checkpoint_influence
+            else:
+                influence_inf += checkpoint_influence
 
 
     else:

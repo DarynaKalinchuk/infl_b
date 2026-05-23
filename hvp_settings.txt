@@ -1,7 +1,1 @@
-TracIn
-GradCos
-LiSSA
-DataInf
-Original
-thetaRelatIF
-lRelatIF
+TracInAdam

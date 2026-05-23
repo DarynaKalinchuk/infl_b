@@ -123,116 +123,107 @@ def template_setting(model_n):
 
 
 
-"""
-Required set-up for influence function computation.
-Prepares models for running EK-FAC and defines the language modeling task
-(in our case, cross-entropy training and query loss).
-"""
-from typing import Dict, List
-
-import torch
-import torch.nn.functional as F
-from torch import nn
-
-from kronfluence.task import Task
-
-BATCH_TYPE = Dict[str, torch.Tensor]
-
-class LanguageModelingTask(Task):
-    def __init__(
-        self, 
-        config: dict,
-    ) -> None:
-        super().__init__()
-        self.config = config
-
-    def compute_train_loss(
-        self,
-        batch: BATCH_TYPE,
-        model: nn.Module,
-        sample: bool = False,
-    ) -> torch.Tensor:
-        logits = model(
-            input_ids=batch["input_ids"],
-            attention_mask=batch["attention_mask"],
-        ).logits.float()
-        logits = logits[..., :-1, :].contiguous()
-        logits = logits.view(-1, logits.size(-1))
-        labels = batch["labels"][..., 1:].contiguous()
-        if not sample:
-            summed_loss = F.cross_entropy(logits, labels.view(-1), reduction="sum", ignore_index=-100)
-        else:
-            with torch.no_grad():
-                probs = torch.nn.functional.softmax(logits.detach(), dim=-1)
-                sampled_labels = torch.multinomial(
-                    probs,
-                    num_samples=1,
-                ).flatten()
-                masks = labels.view(-1) == -100
-                sampled_labels[masks] = -100
-            summed_loss = F.cross_entropy(logits, sampled_labels, ignore_index=-100, reduction="sum")
-        return summed_loss
-
-    def compute_measurement(
-        self,
-        batch: BATCH_TYPE,
-        model: nn.Module,
-    ) -> torch.Tensor:
-        logits = model(
-            input_ids=batch["input_ids"],
-            attention_mask=batch["attention_mask"],
-        ).logits.float()
-        shift_labels = batch["labels"][..., 1:].contiguous().view(-1)
-        logits = logits[..., :-1, :].contiguous().view(-1, logits.size(-1))
-        return F.cross_entropy(logits, shift_labels, ignore_index=-100, reduction="sum")
-
-    def get_influence_tracked_modules(self) -> List[str]:
-        total_modules = []
-        num_layers = self.config['model']['num_layers']
-
-        if self.config['model']['family'] in ["olmo"]:
-
-            for i in range(num_layers):
-
-                total_modules.append(
-                    f"base_model.model.model.layers.{i}.self_attn.q_proj.lora_A.default"
-                )
-                total_modules.append(
-                    f"base_model.model.model.layers.{i}.self_attn.q_proj.lora_B.default"
-                )
-
-                total_modules.append(
-                    f"base_model.model.model.layers.{i}.self_attn.v_proj.lora_A.default"
-                )
-                total_modules.append(
-                    f"base_model.model.model.layers.{i}.self_attn.v_proj.lora_B.default"
-                )
-
-        # elif 
-        else:
-            raise NotImplementedError(
-                f"Model family {self.config['model']['family']} not supported for influence tracking."
-                " Please add the required modules to the `get_influence_tracked_modules` method in `utils/tasks.py`."
-            )
-
-        return total_modules
-
-    def get_attention_mask(self, batch: BATCH_TYPE) -> torch.Tensor:
-        return batch["attention_mask"]
-
-
 
 def get_eta_from_trainer_state(ckpt_path):
 
-    state_path = os.path.join(ckpt_path, "trainer_state.json")
-    step = int(re.search(r"checkpoint-(\d+)", ckpt_path).group(1))
+    optimizer_path = os.path.join(ckpt_path, "optimizer.pt")
+    optimizer_state = torch.load(optimizer_path, map_location="cpu")
 
-    with open(state_path, "r") as f:
-        state = json.load(f)
+    param_groups = optimizer_state["param_groups"]
 
-    for entry in state["log_history"]:
-        if entry.get("step") == step and "learning_rate" in entry:
-            return entry["learning_rate"]
+    lrs = [group["lr"] for group in param_groups]
 
-    raise ValueError(f"No exact learning rate found for checkpoint step {step}")
+    if len(set(lrs)) != 1:
+        raise ValueError(
+            f"Expected exactly one unique LR, got: {lrs}"
+        )
+    
+    return lrs[0]
+
+
+
+def load_adamw_optimizer_state(model, ckpt_path):
+
+    optimizer_path = os.path.join(ckpt_path, "optimizer.pt")
+
+    print(f"\nLoading optimizer state from: {optimizer_path}")
+
+    optimizer_state = torch.load(optimizer_path, map_location="cpu")
+
+    state = optimizer_state["state"]
+    param_groups = optimizer_state["param_groups"]
+
+
+    trainable_params = [
+        (n, p) for n, p in model.named_parameters()
+        if p.requires_grad
+    ]
+
+
+    param_ids = []
+    param_group_map = {}
+
+    for group_idx, group in enumerate(param_groups):
+        for pid in group["params"]:
+            param_ids.append(pid)
+            param_group_map[pid] = group_idx
+
+
+    if len(trainable_params) != len(param_ids):
+        raise ValueError(
+            f"Param count mismatch: "
+            f"model={len(trainable_params)}, "
+            f"optimizer={len(param_ids)}"
+        )
+
+    adam_optimizer_state = {}
+
+
+    for idx, ((name, p), pid) in enumerate(zip(trainable_params, param_ids)):
+
+        if pid not in state:
+            raise ValueError(f"Missing optimizer state for pid={pid}")
+
+        opt_state = state[pid]
+
+        required_keys = ["step", "exp_avg", "exp_avg_sq"]
+
+        for key in required_keys:
+            if key not in opt_state:
+                raise ValueError(f"Missing '{key}' for {name}")
+
+        exp_avg = opt_state["exp_avg"]
+        exp_avg_sq = opt_state["exp_avg_sq"]
+        step = opt_state["step"]
+
+        if exp_avg.shape != p.shape:
+            raise ValueError(
+                f"exp_avg mismatch for {name}: "
+                f"optimizer={tuple(exp_avg.shape)}, "
+                f"model={tuple(p.shape)}"
+            )
+
+        if exp_avg_sq.shape != p.shape:
+            raise ValueError(
+                f"exp_avg_sq mismatch for {name}: "
+                f"optimizer={tuple(exp_avg_sq.shape)}, "
+                f"model={tuple(p.shape)}"
+            )
+
+        step_value = step.item() if torch.is_tensor(step) else step
+
+
+        adam_optimizer_state[name] = {
+            "step": step,
+            "exp_avg": exp_avg,
+            "exp_avg_sq": exp_avg_sq,
+            "lr": param_groups[param_group_map[pid]]["lr"],
+            "betas": param_groups[param_group_map[pid]]["betas"],
+            "eps": param_groups[param_group_map[pid]]["eps"],
+            "weight_decay": param_groups[param_group_map[pid]]["weight_decay"],
+        }
+
+    print("\nOptimizer state successfully loaded and verified.")
+
+    return adam_optimizer_state
 

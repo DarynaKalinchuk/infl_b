@@ -20,13 +20,7 @@ def run_benchmark_measures(
     metrics_path,
     time_elapsed,
 ):
-    fields = ["variation"]
-
-    if (
-        "subvariation" in train_dataset.column_names
-        and "subvariation" in validation_dataset.column_names
-    ):
-        fields.append("subvariation")
+    field = "variation"
 
     if influence.shape != (len(validation_dataset), len(train_dataset)):
         raise ValueError(
@@ -37,88 +31,67 @@ def run_benchmark_measures(
     cov_cnt = len(train_dataset) // len(set(train_dataset["variation"]))
     n = len(validation_dataset)
 
-    overall = {
-        field: {"acc": 0, "cov": 0, "auc": 0, "var_ratio": 0}
-        for field in fields
-    }
+    overall = {"acc": 0, "cov": 0, "auc": 0, "var_ratio": 0}
 
-    per_field = {
-        field: defaultdict(
-            lambda: {
-                "count": 0,
-                "acc": 0,
-                "cov": 0,
-                "auc": 0,
-                "var_ratio": 0,
-            }
-        )
-        for field in fields
-    }
+    per_variation = defaultdict(
+        lambda: {
+            "count": 0,
+            "acc": 0,
+            "cov": 0,
+            "auc": 0,
+            "var_ratio": 0,
+        }
+    )
 
     for i in range(n):
         scores = -influence.loc[i].to_numpy()
 
         indices = np.argpartition(scores, -cov_cnt)[-cov_cnt:]
         topk = indices[np.argsort(scores[indices])[::-1]]
-
         top1 = int(topk[0])
 
-        for field in fields:
-            val_label = validation_dataset[field][i]
+        val_label = validation_dataset[field][i]
 
-            # Relevant-class mask
-            labels = (
-                np.array(train_dataset[field]) == val_label
-            ).astype(int)
+        labels = (np.array(train_dataset[field]) == val_label).astype(int)
+        relevant_scores = scores[labels == 1]
 
-            relevant_scores = scores[labels == 1]
+        all_var = np.var(scores)
+        rel_var = np.var(relevant_scores)
+        var_ratio = rel_var / all_var if all_var > 0 else 0.0
 
-            # Variance ratio
-            all_var = np.var(scores)
-            rel_var = np.var(relevant_scores)
+        stats = per_variation[val_label]
+        stats["count"] += 1
 
-            var_ratio = rel_var / all_var if all_var > 0 else 0.0
+        if train_dataset[field][top1] == val_label:
+            overall["acc"] += 1
+            stats["acc"] += 1
 
-            # Accuracy, Coverage
-            stats = per_field[field][val_label]
-            stats["count"] += 1
+        cov_hits = sum(
+            train_dataset[field][int(idx)] == val_label
+            for idx in topk
+        )
 
-            if train_dataset[field][top1] == val_label:
-                overall[field]["acc"] += 1
-                stats["acc"] += 1
+        overall["cov"] += cov_hits
+        stats["cov"] += cov_hits
 
-            cov_hits = sum(
-                train_dataset[field][int(idx)] == val_label
-                for idx in topk
-            )
+        auc = roc_auc_score(labels, scores)
+        overall["auc"] += auc
+        stats["auc"] += auc
 
-            overall[field]["cov"] += cov_hits
-            stats["cov"] += cov_hits
-
-            # AUC
-            auc = roc_auc_score(labels, scores)
-
-            overall[field]["auc"] += auc
-            stats["auc"] += auc
-
-            # Variance ratio aggregation
-            overall[field]["var_ratio"] += var_ratio
-            stats["var_ratio"] += var_ratio
+        overall["var_ratio"] += var_ratio
+        stats["var_ratio"] += var_ratio
 
     metrics = {
         "time_elapsed": time_elapsed,
-        "overall": {},
-    }
-
-    for field in fields:
-        metrics["overall"][field] = {
-            "accuracy": overall[field]["acc"] / n,
-            "coverage": overall[field]["cov"] / (n * cov_cnt),
-            "auc": overall[field]["auc"] / n,
-            "variance_ratio": overall[field]["var_ratio"] / n,
-        }
-
-        metrics[f"per_{field}"] = {
+        "overall": {
+            "variation": {
+                "accuracy": overall["acc"] / n,
+                "coverage": overall["cov"] / (n * cov_cnt),
+                "auc": overall["auc"] / n,
+                "variance_ratio": overall["var_ratio"] / n,
+            }
+        },
+        "per_variation": {
             str(label): {
                 "num_samples": vals["count"],
                 "accuracy": vals["acc"] / vals["count"],
@@ -126,15 +99,13 @@ def run_benchmark_measures(
                 "auc": vals["auc"] / vals["count"],
                 "variance_ratio": vals["var_ratio"] / vals["count"],
             }
-            for label, vals in per_field[field].items()
-        }
+            for label, vals in per_variation.items()
+        },
+    }
 
-        print(f"{field.title()} Acc:", metrics["overall"][field]["accuracy"])
-        print(f"{field.title()} Cover:", metrics["overall"][field]["coverage"])
-        print(
-            f"{field.title()} VarRatio:",
-            metrics["overall"][field]["variance_ratio"],
-        )
+    print("Variation Acc:", metrics["overall"]["variation"]["accuracy"])
+    print("Variation Cover:", metrics["overall"]["variation"]["coverage"])
+    print("Variation VarRatio:", metrics["overall"]["variation"]["variance_ratio"])
 
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
@@ -167,29 +138,26 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
             else stem
         )
 
-        exp = parts[2] 
+        exp = parts[2]
 
         with open(os.path.join(results_dir, file)) as f:
             grouped[group].append((exp, json.load(f)))
 
     metric_names = ["accuracy", "coverage", "auc", "variance_ratio", "time"]
     metric_labels = ["Accuracy", "Coverage", "AUC", "Var Ratio", "Runtime"]
-    fields = ["variation", "subvariation"]
 
     figures = {}
 
     for group_key, experiments in grouped.items():
 
         variation_names = sorted({
-            f"overall {f}"
+            "overall variation"
             for _, m in experiments
-            for f in fields
-            if f in m.get("overall", {})
+            if "variation" in m.get("overall", {})
         } | {
-            f"{f}: {k}"
+            f"variation: {k}"
             for _, m in experiments
-            for f in fields
-            for k in m.get(f"per_{f}", {})
+            for k in m.get("per_variation", {})
         })
 
         experiment_labels = []
@@ -223,15 +191,10 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
         for exp_idx, (exp, metrics) in enumerate(experiments):
 
             variation_map = {
+                "overall variation": metrics["overall"]["variation"],
                 **{
-                    f"overall {f}": metrics["overall"][f]
-                    for f in fields
-                    if f in metrics.get("overall", {})
-                },
-                **{
-                    f"{f}: {k}": v
-                    for f in fields
-                    for k, v in metrics.get(f"per_{f}", {}).items()
+                    f"variation: {k}": v
+                    for k, v in metrics.get("per_variation", {}).items()
                 },
             }
 
