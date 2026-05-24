@@ -108,70 +108,17 @@ if __name__ == '__main__':
 
         influence_inf = -sim_df  #negation because the larger the similarity, the better; unlike influence.
 
-    
 
-    elif args.hvp_cal == "TracIn":
+    elif "TracIn" in args.hvp_cal:
 
-        print("Calculating TracIn...")
-
-        ckpt_root = "lora_adapter/" + core_path
-
-        checkpoint_paths = sorted(
-            glob.glob(os.path.join(ckpt_root, "checkpoint-*")),
-            key=lambda x: int(x.split("-")[-1])
-        )[:1] #for testing just the 1 check point
-
-
-
-        tokenized_tr = get_preprocessed_dataset(
-            tokenizer, dataset["train"], chat_template, max_length=args.max_length
-        )
-        tokenized_val = get_preprocessed_dataset(
-            tokenizer, dataset["test"], chat_template, max_length=args.max_length
-        )
-
-        influence_inf = None
-
-        for ckpt_path in tqdm(checkpoint_paths, desc="Checkpoints"):
-            print(f"Collecting gradients for {ckpt_path}")
-
-            
-            model = PeftModel.from_pretrained(base_model, ckpt_path, is_trainable=True)
-
-            tr_grad_dict, val_grad_dict = collect_gradient( 
-                model,
-                tokenizer,
-                tokenized_tr,
-                tokenized_val
-            )
-
-            
-            eta = get_eta_from_trainer_state(ckpt_path)
-
-            checkpoint_influence = gradient_influence_estimation(
-                tr_grad_dict=tr_grad_dict,
-                val_grad_dict=val_grad_dict,
-                hvp_cal="TracIn",
-                hyperparams={"eta": eta},
-            )
-
-            if influence_inf is None:
-                influence_inf = checkpoint_influence
-            else:
-                influence_inf += checkpoint_influence
-
-
-    elif args.hvp_cal == "TracInAdam":
-
-        print("Calculating TracInAdam...")
+        print("Calculating {args.hvp_cal}...")
 
         ckpt_root = "lora_adapter/" + core_path
 
         checkpoint_paths = sorted(
             glob.glob(os.path.join(ckpt_root, "checkpoint-*")),
             key=lambda x: int(x.split("-")[-1])
-        )[:1] #for testing just the 1 check point
-
+        ) #[:1] #for testing just the 1 check point
 
 
         tokenized_tr = get_preprocessed_dataset(
@@ -203,7 +150,7 @@ if __name__ == '__main__':
             checkpoint_influence = gradient_influence_estimation(
                 tr_grad_dict=tr_grad_dict,
                 val_grad_dict=val_grad_dict,
-                hvp_cal="TracInAdam",
+                hvp_cal= args.hvp_cal,
                 hyperparams={"adamw_optimizer_state": adamw_optimizer_state},
             )
 

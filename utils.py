@@ -92,6 +92,17 @@ def template_setting(model_n):
             "<|start_header_id|>assistant<|end_header_id|>\n"
             "{response}"
         )
+
+    elif model_n == 'Llama':
+        model_name = "meta-llama/Llama-3.2-3B-Instruct"
+        chat_template = (
+            "<|begin_of_text|>"
+            "<|start_header_id|>user<|end_header_id|>\n"
+            "{prompt}<|eot_id|>\n"
+            "<|start_header_id|>assistant<|end_header_id|>\n"
+            "{response}"
+        )
+        
     elif model_n == 'Qwen0.5':
         model_name = "Qwen/Qwen2.5-0.5B-Instruct"
         chat_template = (
@@ -119,26 +130,9 @@ def template_setting(model_n):
             "{response}<|endoftext|>"
         )
 
+    
     return model_name, chat_template
 
-
-
-
-def get_eta_from_trainer_state(ckpt_path):
-
-    optimizer_path = os.path.join(ckpt_path, "optimizer.pt")
-    optimizer_state = torch.load(optimizer_path, map_location="cpu")
-
-    param_groups = optimizer_state["param_groups"]
-
-    lrs = [group["lr"] for group in param_groups]
-
-    if len(set(lrs)) != 1:
-        raise ValueError(
-            f"Expected exactly one unique LR, got: {lrs}"
-        )
-    
-    return lrs[0]
 
 
 

@@ -105,23 +105,23 @@ def gradient_influence_estimation(
         if name in first_val
     ]
 
-    def flatten_grad_dict(example_grad_dict):
-        return torch.cat([
-            example_grad_dict[name].reshape(-1)
+    G_train = torch.stack([
+        torch.cat([
+            tr_grad_dict[tr_id][name].reshape(-1)
             for name in param_order
         ])
-
-    G_train = torch.stack([
-        flatten_grad_dict(tr_grad_dict[tr_id])
         for tr_id in train_ids
     ]).to(device)
 
     G_val = torch.stack([
-        flatten_grad_dict(val_grad_dict[val_id])
+        torch.cat([
+            val_grad_dict[val_id][name].reshape(-1)
+            for name in param_order
+        ])
         for val_id in val_ids
     ]).to(device)
 
-    # Fast paths where flattening is directly valid
+
     if hvp_cal == "GradDot":
         scores = -(G_val @ G_train.T)
         
@@ -151,19 +151,20 @@ def gradient_influence_estimation(
                     f"TracInAdam currently assumes weight_decay == 0. "
                     f"Found weight_decay={wd} for parameter '{weight_name}'."
                 )
-
-            # v_hat = v / (1.0 - beta2 ** step)
-            v_hat = torch.ones_like(v)
-            eps = 0.0
-            # m_hat = m # no bias correction / (1.0 - beta1 ** step)
-            adam_update = lr / (torch.sqrt(v_hat) + eps)
+            
 
             Gt = torch.stack([
                 tr_grad_dict[tr_id][weight_name].reshape(-1)
                 for tr_id in train_ids
             ]).to(device)
 
-            adam_preconditioned_train = Gt * adam_update[None, :]
+            updated_m = beta1 * m + (1 - beta1) * Gt
+            updated_v = beta2 * v + (1 - beta2) * Gt ** 2
+
+            updated_m_hat = updated_m / (1 - beta1 ** (step + 1))
+            updated_v_hat = updated_v / (1 - beta2 ** (step + 1))
+
+            adam_preconditioned_train = lr * updated_m_hat / (torch.sqrt(updated_v_hat) + eps)
 
             train_update_parts.append(adam_preconditioned_train)
 
@@ -172,11 +173,21 @@ def gradient_influence_estimation(
         scores = -(G_val @ G_train_adam.T)
 
     elif hvp_cal == "TracIn":
-        if "eta" not in hyperparams:
-            raise ValueError("TracIn requires hyperparameter 'eta'.")
 
-        eta = float(hyperparams["eta"])
-        scores = -eta * (G_val @ G_train.T)
+        adamw_state = hyperparams.get("adamw_optimizer_state")
+        if adamw_state is None:
+            raise ValueError("TracIn requires 'adamw_optimizer_state'.")
+        
+        lrs = {st["lr"] for st in adamw_state.values()}
+
+        if len(lrs) != 1:
+            raise ValueError(
+                f"Expected same learning rate for all weights, got: {sorted(lrs)}"
+            )
+        
+        lr = list(lrs)[0]
+
+        scores = -lr * (G_val @ G_train.T)
 
     elif hvp_cal == "GradCos":
         val_norms = torch.linalg.norm(G_val, dim=1, keepdim=True)
@@ -214,7 +225,7 @@ def gradient_influence_estimation(
 
         del H_val, hvp_parts
 
-    elif hvp_cal == "thetaRelatIF":
+    elif hvp_cal == "theta-RelatIF":
 
         hvp_parts = []
         train_hvp_parts = []
@@ -254,7 +265,7 @@ def gradient_influence_estimation(
 
         del H_val, hvp_parts
 
-    elif hvp_cal == "lRelatIF":
+    elif hvp_cal == "l-RelatIF":
 
         hvp_parts = []
         train_hvp_parts = []
@@ -331,39 +342,6 @@ def gradient_influence_estimation(
 
         del H_val, hvp_parts
 
-    
-    elif hvp_cal == "Original":
-        hvp_parts = []
-
-        for weight_name in tqdm(param_order):
-            Gt = torch.stack([
-                tr_grad_dict[tr_id][weight_name].reshape(-1)
-                for tr_id in train_ids
-            ]).to(device)
-
-            Gv = torch.stack([
-                val_grad_dict[val_id][weight_name].reshape(-1)
-                for val_id in val_ids
-            ]).to(device)
-
-            lambda_const = Gt.pow(2).mean(dim=1).mean() / lambda_const_param
-
-            AAt_matrix = Gt.T @ Gt
-
-            # AAt is symmetric, so eigh is better than eig here.
-            L, V = torch.linalg.eigh(AAt_matrix)
-
-            hvp = Gv @ V
-            hvp = (hvp / (lambda_const + L / n_train)) @ V.T
-
-            hvp_parts.append(hvp)
-
-            del Gt, Gv, AAt_matrix, L, V, hvp
-
-        H_val = torch.cat(hvp_parts, dim=1)
-        scores = -(H_val @ G_train.T)
-
-        del H_val, hvp_parts
         
     else:
         raise Exception("Invalid hvp calculation option.")
