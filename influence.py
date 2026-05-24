@@ -68,6 +68,36 @@ if __name__ == '__main__':
 
         sys.exit()
 
+    elif args.hvp_cal == "BM25":
+        from rank_bm25 import BM25Okapi
+        import pandas as pd
+
+        print("Calculating BM25 influence...")
+
+        train_texts = [
+            p + " " + r
+            for p, r in zip(dataset["train"]["prompts"],
+                            dataset["train"]["response"])
+        ]
+
+        test_texts = [
+            p + " " + r
+            for p, r in zip(dataset["test"]["prompts"],
+                            dataset["test"]["response"])
+        ]
+
+        tokenized_train = [x.lower().split() for x in train_texts]
+        tokenized_test = [x.lower().split() for x in test_texts]
+
+        bm25 = BM25Okapi(tokenized_train)
+
+        scores = []
+        for q in tqdm(tokenized_test):
+            scores.append(bm25.get_scores(q))
+
+        bm25_df = pd.DataFrame(scores)
+
+        influence_inf = -bm25_df
 
 
     elif "Sim" in args.hvp_cal:
