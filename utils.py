@@ -92,17 +92,6 @@ def template_setting(model_n):
             "<|start_header_id|>assistant<|end_header_id|>\n"
             "{response}"
         )
-
-    elif model_n == 'Llama':
-        model_name = "meta-llama/Llama-3.2-3B-Instruct"
-        chat_template = (
-            "<|begin_of_text|>"
-            "<|start_header_id|>user<|end_header_id|>\n"
-            "{prompt}<|eot_id|>\n"
-            "<|start_header_id|>assistant<|end_header_id|>\n"
-            "{response}"
-        )
-        
     elif model_n == 'Qwen0.5':
         model_name = "Qwen/Qwen2.5-0.5B-Instruct"
         chat_template = (
@@ -130,7 +119,6 @@ def template_setting(model_n):
             "{response}<|endoftext|>"
         )
 
-    
     return model_name, chat_template
 
 

@@ -31,7 +31,7 @@ def run_benchmark_measures(
     cov_cnt = len(train_dataset) // len(set(train_dataset["variation"]))
     n = len(validation_dataset)
 
-    overall = {"acc": 0, "cov": 0, "auc": 0, "var_ratio": 0}
+    overall = {"acc": 0, "cov": 0, "auc": 0, "range_ratio": 0}
 
     per_variation = defaultdict(
         lambda: {
@@ -39,7 +39,7 @@ def run_benchmark_measures(
             "acc": 0,
             "cov": 0,
             "auc": 0,
-            "var_ratio": 0,
+            "range_ratio": 0,
         }
     )
 
@@ -55,9 +55,9 @@ def run_benchmark_measures(
         labels = (np.array(train_dataset[field]) == val_label).astype(int)
         relevant_scores = scores[labels == 1]
 
-        all_var = np.var(scores)
-        rel_var = np.var(relevant_scores)
-        var_ratio = rel_var / all_var if all_var > 0 else 0.0
+        all_range = np.max(scores) - np.min(scores)
+        rel_range = np.max(relevant_scores) - np.min(relevant_scores)
+        range_ratio = rel_range / all_range if all_range > 0 else 0.0
 
         stats = per_variation[val_label]
         stats["count"] += 1
@@ -78,8 +78,8 @@ def run_benchmark_measures(
         overall["auc"] += auc
         stats["auc"] += auc
 
-        overall["var_ratio"] += var_ratio
-        stats["var_ratio"] += var_ratio
+        overall["range_ratio"] += range_ratio
+        stats["range_ratio"] += range_ratio
 
     metrics = {
         "time_elapsed": time_elapsed,
@@ -88,7 +88,7 @@ def run_benchmark_measures(
                 "accuracy": overall["acc"] / n,
                 "coverage": overall["cov"] / (n * cov_cnt),
                 "auc": overall["auc"] / n,
-                "variance_ratio": overall["var_ratio"] / n,
+                "range_ratio": overall["range_ratio"] / n,
             }
         },
         "per_variation": {
@@ -97,15 +97,15 @@ def run_benchmark_measures(
                 "accuracy": vals["acc"] / vals["count"],
                 "coverage": vals["cov"] / (vals["count"] * cov_cnt),
                 "auc": vals["auc"] / vals["count"],
-                "variance_ratio": vals["var_ratio"] / vals["count"],
+                "range_ratio": vals["range_ratio"] / vals["count"],
             }
             for label, vals in per_variation.items()
         },
     }
 
-    print("Variation Acc:", metrics["overall"]["variation"]["accuracy"])
-    print("Variation Cover:", metrics["overall"]["variation"]["coverage"])
-    print("Variation VarRatio:", metrics["overall"]["variation"]["variance_ratio"])
+    print("Accuracy:", metrics["overall"]["variation"]["accuracy"])
+    print("Coverage:", metrics["overall"]["variation"]["coverage"])
+    print("Range Ratio:", metrics["overall"]["variation"]["range_ratio"])
 
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
@@ -113,13 +113,10 @@ def run_benchmark_measures(
     return metrics
 
 
-
 def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True):
 
     if not os.path.exists(results_dir):
-        raise FileNotFoundError(
-            f"Directory not found: {results_dir}"
-        )
+        raise FileNotFoundError(f"Directory not found: {results_dir}")
 
     files = sorted(
         f for f in os.listdir(results_dir)
@@ -132,19 +129,14 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
         stem = file.removesuffix(".json")
         parts = stem.split("_")
 
-        group = (
-            "_".join(parts[:2])
-            if len(parts) >= 2
-            else stem
-        )
-
+        group = "_".join(parts[:2]) if len(parts) >= 2 else stem
         exp = parts[2]
 
         with open(os.path.join(results_dir, file)) as f:
             grouped[group].append((exp, json.load(f)))
 
-    metric_names = ["accuracy", "coverage", "auc", "variance_ratio", "time"]
-    metric_labels = ["Accuracy", "Coverage", "AUC", "Var Ratio", "Runtime"]
+    metric_names = ["accuracy", "coverage", "auc", "range_ratio", "time"]
+    metric_labels = ["Accuracy", "Coverage", "AUC", "Range Ratio", "Runtime"]
 
     figures = {}
 
@@ -165,23 +157,10 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
 
         for exp, _ in experiments:
             for i, variation in enumerate(variation_names):
-                experiment_labels.append(
-                    exp if i == 0 else ""
-                )
+                experiment_labels.append(exp if i == 0 else "")
                 variation_labels.append(variation)
 
-        row_names = [
-            [exp_label, var_label]
-            for exp_label, var_label in zip(
-                experiment_labels,
-                variation_labels
-            )
-        ]
-
-        col_names = (
-            ["Method", "Variation"]
-            + metric_labels
-        )
+        col_names = ["Method", "Variation"] + metric_labels
 
         values = np.full(
             (len(experiment_labels), len(metric_labels)),
@@ -199,61 +178,33 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
             }
 
             for var_idx, variation in enumerate(variation_names):
-
-                row_idx = (
-                    exp_idx * len(variation_names)
-                    + var_idx
-                )
+                row_idx = exp_idx * len(variation_names) + var_idx
 
                 if variation not in variation_map:
                     continue
 
                 vals = variation_map[variation]
 
-                values[row_idx, 0] = vals.get(
-                    "accuracy",
-                    np.nan
-                )
-
-                values[row_idx, 1] = vals.get(
-                    "coverage",
-                    np.nan
-                )
-
-                values[row_idx, 2] = vals.get(
-                    "auc",
-                    np.nan
-                )
-
-                values[row_idx, 3] = vals.get(
-                    "variance_ratio",
-                    np.nan
-                )
+                values[row_idx, 0] = vals.get("accuracy", np.nan)
+                values[row_idx, 1] = vals.get("coverage", np.nan)
+                values[row_idx, 2] = vals.get("auc", np.nan)
+                values[row_idx, 3] = vals.get("range_ratio", np.nan)
 
                 if variation.startswith("overall"):
-                    values[row_idx, 4] = metrics.get(
-                        "time_elapsed",
-                        np.nan
-                    )
-
-        metric_norm = Normalize(0, 1)
-
-        time_col = metric_labels.index("Runtime")
-
-        finite_times = values[:, time_col][
-            np.isfinite(values[:, time_col])
-        ]
-
-        time_norm = Normalize(
-            finite_times.min()
-            if len(finite_times)
-            else 0,
-            finite_times.max()
-            if len(finite_times)
-            else 1,
-        )
+                    values[row_idx, 4] = metrics.get("time_elapsed", np.nan)
 
         cmap = cm.get_cmap("RdYlGn")
+        reverse_cmap = cm.get_cmap("RdYlGn_r")
+
+        col_norms = []
+
+        for c in range(values.shape[1]):
+            finite = values[:, c][np.isfinite(values[:, c])]
+
+            if len(finite) and finite.min() != finite.max():
+                col_norms.append(Normalize(finite.min(), finite.max()))
+            else:
+                col_norms.append(Normalize(0, 1))
 
         cell_colours = [
             [
@@ -262,10 +213,10 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
                 *[
                     (1, 1, 1, 1)
                     if np.isnan(v)
-                    else cmap(
-                        time_norm(v)
-                        if c == time_col
-                        else metric_norm(v)
+                    else (
+                        reverse_cmap(col_norms[c](v))
+                        if c in [3, 4]  # Range Ratio + Runtime: lower is better
+                        else cmap(col_norms[c](v))
                     )
                     for c, v in enumerate(row)
                 ]
@@ -281,7 +232,7 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
                     ""
                     if np.isnan(v)
                     else f"{v:.2f}s"
-                    if c == time_col
+                    if c == 4
                     else f"{v * 100:.2f}%"
                     for c, v in enumerate(row)
                 ]
@@ -296,11 +247,7 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
         fig, ax = plt.subplots(
             figsize=(
                 max(10, len(col_names) * 2),
-                max(
-                    4,
-                    len(experiment_labels)
-                    * figsize_scale + 2
-                ),
+                max(4, len(experiment_labels) * figsize_scale + 2),
             )
         )
 
@@ -340,3 +287,12 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
             bbox_inches="tight",
             dpi=300
         )
+
+        figures[group_key] = fig
+
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
+
+    return figures
