@@ -5,18 +5,18 @@ from tqdm import tqdm
 from collections import defaultdict
 from utils import *
 import json
+from rank_bm25 import BM25Okapi
 
 
 
-
-def similarity_influence_estimation(test_vec, train_vecs, hvp_cal = "RepEucSim"):
+def similarity_influence_estimation(test_vec, train_vecs, inf_method = "RepEucSim"):
     RepCosSim = lambda a, b: np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
     RepDotSim = lambda a, b: np.dot(a, b)
     RepEucSim = lambda a, b: -np.linalg.norm(a - b)**2
 
-    sim_fn = locals().get(hvp_cal)
+    sim_fn = locals().get(inf_method)
     if sim_fn is None:
-        raise ValueError(f"Unknown similarity type: {hvp_cal}")
+        raise ValueError(f"Unknown similarity type: {inf_method}")
     
     sim = []
     for i in range(len(train_vecs)):
@@ -28,6 +28,8 @@ def similarity_influence_estimation(test_vec, train_vecs, hvp_cal = "RepEucSim")
 
 
 def random_influence_estimation(dataset, metrics_path):
+
+    print(f"Calculating random influence...")
 
     train_var = dataset["train"]["variation"]
     eval_var = dataset["test"]["variation"]
@@ -75,7 +77,7 @@ def random_influence_estimation(dataset, metrics_path):
 def gradient_influence_estimation(
     tr_grad_dict,
     val_grad_dict,
-    hvp_cal="DataInf",
+    inf_method="DataInf",
     hyperparams=None,
     device="cuda",
 ):
@@ -86,7 +88,7 @@ def gradient_influence_estimation(
     n_iteration = int(hyperparams.get("n_iteration", 10))
     alpha_const = float(hyperparams.get("alpha_const", 1.0))
 
-    print(f"Calculating influence with {hvp_cal}.")
+    print(f"Calculating influence with {inf_method}.")
     print(
         f"Params: lambda_const_param={lambda_const_param}, "
         f"n_iteration={n_iteration}, "
@@ -122,10 +124,10 @@ def gradient_influence_estimation(
     ]).to(device)
 
 
-    if hvp_cal == "GradDot":
+    if inf_method == "GradDot":
         scores = -(G_val @ G_train.T)
         
-    elif hvp_cal == "TracInAdam":
+    elif inf_method == "TracInAdam":
         adamw_state = hyperparams.get("adamw_optimizer_state")
         if adamw_state is None:
             raise ValueError("TracInAdam requires 'adamw_optimizer_state'.")
@@ -172,7 +174,7 @@ def gradient_influence_estimation(
 
         scores = -(G_val @ G_train_adam.T)
 
-    elif hvp_cal == "TracIn":
+    elif inf_method == "TracIn":
 
         adamw_state = hyperparams.get("adamw_optimizer_state")
         if adamw_state is None:
@@ -189,12 +191,12 @@ def gradient_influence_estimation(
 
         scores = -lr * (G_val @ G_train.T)
 
-    elif hvp_cal == "GradCos":
+    elif inf_method == "GradCos":
         val_norms = torch.linalg.norm(G_val, dim=1, keepdim=True)
         tr_norms = torch.linalg.norm(G_train, dim=1, keepdim=True).T
         scores = -(G_val @ G_train.T / (val_norms * tr_norms + 1e-12))
 
-    elif hvp_cal == "DataInf":
+    elif inf_method == "DataInf":
 
         hvp_parts = []
 
@@ -225,7 +227,7 @@ def gradient_influence_estimation(
 
         del H_val, hvp_parts
 
-    elif hvp_cal == "theta-RelatIF":
+    elif inf_method == "theta-RelatIF":
 
         hvp_parts = []
         train_hvp_parts = []
@@ -265,7 +267,7 @@ def gradient_influence_estimation(
 
         del H_val, hvp_parts
 
-    elif hvp_cal == "l-RelatIF":
+    elif inf_method == "l-RelatIF":
 
         hvp_parts = []
         train_hvp_parts = []
@@ -310,7 +312,7 @@ def gradient_influence_estimation(
 
         del H_val, hvp_parts
 
-    elif hvp_cal == "LiSSA":
+    elif inf_method == "LiSSA":
         hvp_parts = []
 
         for weight_name in tqdm(param_order):
@@ -361,3 +363,39 @@ def gradient_influence_estimation(
     print("End of influence estimation.")
     return df
 
+
+
+def BM25_scores(dataset):
+
+    print("Calculating BM25 scores...")
+
+    train_texts = [
+        p + " " + r
+        for p, r in zip(
+            dataset["train"]["prompts"],
+            dataset["train"]["response"]
+        )
+    ]
+
+    test_texts = [
+        p + " " + r
+        for p, r in zip(
+            dataset["test"]["prompts"],
+            dataset["test"]["response"]
+        )
+    ]
+
+    tokenized_train = [x.lower().split() for x in train_texts]
+    tokenized_test = [x.lower().split() for x in test_texts]
+
+    bm25 = BM25Okapi(tokenized_train)
+
+    scores = []
+    for q in tqdm(tokenized_test):
+        scores.append(bm25.get_scores(q))
+
+    bm25_df = pd.DataFrame(scores)
+
+    influence_inf = -bm25_df #negated
+
+    return influence_inf

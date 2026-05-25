@@ -1,3 +1,8 @@
+# from importlib.metadata import distributions
+
+# for dist in distributions():
+#     print(f"{dist.metadata['Name']}=={dist.version}")
+
 from datasets import load_from_disk
 from transformers import AutoTokenizer
 import time
@@ -26,7 +31,7 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=str, default='Llama-2-7b-chat-hf', help='model name')
     parser.add_argument('--dataset', type=str, required=True, help='dataset')
     parser.add_argument('--epochs', type=int, default=10, help='epochs')
-    parser.add_argument('--hvp_cal', type=str, required=False, help='influence estimation method')
+    parser.add_argument('--inf_method', type=str, required=False, help='influence estimation method')
     parser.add_argument('--max_length', type=int, default=128, help='tokenizer padding max length')
     parser.add_argument('--lambda_c', type=float, default=10, help='lambda const')
     parser.add_argument('--iter', type=int, default=3, help='#iteration')
@@ -50,7 +55,7 @@ if __name__ == '__main__':
     # results statistics directory
     results_dir = "results"
     os.makedirs(results_dir, exist_ok=True)
-    metrics_filename = f"{args.dataset}_{args.model}_{args.hvp_cal}_metrics_results.json".replace(" ", "_")
+    metrics_filename = f"{args.dataset}_{args.model}_{args.inf_method}_metrics_results.json".replace(" ", "_")
     metrics_path = os.path.join(results_dir, metrics_filename)
 
     quantization_config = None
@@ -60,47 +65,18 @@ if __name__ == '__main__':
     start_time = time.time()
     
 
-    if (args.hvp_cal == "random"):
-
-        print(f"Calculating random influence...")
+    if (args.inf_method == "random"):
         
         random_influence_estimation(dataset = dataset, metrics_path = metrics_path)
 
         sys.exit()
 
-    elif args.hvp_cal == "BM25":
-        from rank_bm25 import BM25Okapi
-        import pandas as pd
+    elif args.inf_method == "BM25":
 
-        print("Calculating BM25 influence...")
-
-        train_texts = [
-            p + " " + r
-            for p, r in zip(dataset["train"]["prompts"],
-                            dataset["train"]["response"])
-        ]
-
-        test_texts = [
-            p + " " + r
-            for p, r in zip(dataset["test"]["prompts"],
-                            dataset["test"]["response"])
-        ]
-
-        tokenized_train = [x.lower().split() for x in train_texts]
-        tokenized_test = [x.lower().split() for x in test_texts]
-
-        bm25 = BM25Okapi(tokenized_train)
-
-        scores = []
-        for q in tqdm(tokenized_test):
-            scores.append(bm25.get_scores(q))
-
-        bm25_df = pd.DataFrame(scores)
-
-        influence_inf = -bm25_df
+        influence_inf = BM25_scores(dataset = dataset)
 
 
-    elif "Sim" in args.hvp_cal:
+    elif "Sim" in args.inf_method:
 
         
         model = PeftModel.from_pretrained(
@@ -131,7 +107,7 @@ if __name__ == '__main__':
 
         sim_matrix = []
         for item in tqdm(check):
-            arr = similarity_influence_estimation(test_vec=item, train_vecs=query,hvp_cal=args.hvp_cal)
+            arr = similarity_influence_estimation(test_vec=item, train_vecs=query,inf_method=args.inf_method)
             sim_matrix.append(arr)
 
         sim_df = pd.DataFrame(sim_matrix)
@@ -139,9 +115,9 @@ if __name__ == '__main__':
         influence_inf = -sim_df  #negation because the larger the similarity, the better; unlike influence.
 
 
-    elif "TracIn" in args.hvp_cal:
+    elif "TracIn" in args.inf_method:
 
-        print("Calculating {args.hvp_cal}...")
+        print("Calculating {args.inf_method}...")
 
         ckpt_root = "lora_adapter/" + core_path
 
@@ -180,7 +156,7 @@ if __name__ == '__main__':
             checkpoint_influence = gradient_influence_estimation(
                 tr_grad_dict=tr_grad_dict,
                 val_grad_dict=val_grad_dict,
-                hvp_cal= args.hvp_cal,
+                inf_method= args.inf_method,
                 hyperparams={"adamw_optimizer_state": adamw_optimizer_state},
             )
 
@@ -208,14 +184,14 @@ if __name__ == '__main__':
 
         influence_inf = gradient_influence_estimation(tr_grad_dict = tr_grad_dict, 
                                                       val_grad_dict = val_grad_dict,
-                                                      hvp_cal=args.hvp_cal, 
+                                                      inf_method=args.inf_method, 
                                                       hyperparams = inf_args_map)
 
     end_time = time.time()
 
     cache_dir = 'cache/' + args.model + '/'
     os.makedirs(cache_dir, exist_ok=True)
-    influence_inf.to_csv(cache_dir + args.dataset + '_' + str(args.epochs) + args.hvp_cal + '.csv', index_label=False)
+    influence_inf.to_csv(cache_dir + args.dataset + '_' + str(args.epochs) + args.inf_method + '.csv', index_label=False)
     run_benchmark_measures(influence = influence_inf, train_dataset = dataset['train'], 
                   validation_dataset = dataset['test'], 
                   metrics_path = metrics_path,

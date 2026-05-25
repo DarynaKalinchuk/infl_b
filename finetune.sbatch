@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name="fntune1"
-#SBATCH --container-image=kalinchukd/inf_env:latest
+#SBATCH --container-image=kalinchukd/inf_env3:latest
 #SBATCH --container-mount-home
 #SBATCH --mem=128G 
 #SBATCH --cpus-per-task=24  
