@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir \
     matplotlib==3.10.7 \
     scikit-learn==1.7.2 \
     pandas==2.2.3 \
-    transformers==5.0.0 \
+    transformers==5.5.0 \
     datasets==4.3.0
     
 CMD ["python3"]
