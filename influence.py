@@ -13,7 +13,7 @@ from postprocess_utils import *
 from inf_est_methods import *
 from tqdm.auto import tqdm
 
-
+import random
 import pickle
 import argparse
 import os
@@ -21,7 +21,13 @@ import sys
 import glob
 from huggingface_hub import login
 
+seed = 1
 
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
 
 with open("TOKENS.txt", "r") as f:
     line = f.read().strip()
@@ -41,6 +47,8 @@ if __name__ == '__main__':
 
     if args.model in {"Llama", "Qwen0.5", "Qwen1.5", "Olmo"}:
         model_name, chat_template = template_setting(args.model)
+    elif args.model == "randomOlmo":
+        model_name, chat_template = template_setting("Olmo")
     else:
         raise ValueError("Invalid model name")
 
@@ -95,14 +103,26 @@ if __name__ == '__main__':
             with torch.no_grad():
                 outputs = model(**inputs, output_hidden_states=True)
 
-            check.append(outputs['hidden_states'][-1][:, -1, :].view(-1).cpu().numpy().T)
+            check.append(
+                outputs["hidden_states"][-1][:, -1, :]
+                .view(-1)
+                .float()
+                .cpu()
+                .numpy()
+            )
 
         query = []
         for p in tqdm(dataset['train']['prompts']):
             inputs = tokenizer(chat_template.format(prompt=p), padding=True, return_tensors="pt").to('cuda')
             with torch.no_grad():
                 outputs = model(**inputs, output_hidden_states=True)
-                query.append(outputs['hidden_states'][-1][:, -1, :].view(-1).cpu().numpy())
+                query.append(
+                    outputs["hidden_states"][-1][:, -1, :]
+                    .view(-1)
+                    .float()
+                    .cpu()
+                    .numpy()
+                )
 
 
         sim_matrix = []
@@ -116,6 +136,10 @@ if __name__ == '__main__':
 
 
     elif "TracIn" in args.inf_method:
+
+        if "random" in args.model:
+            print("TracIn disabled for randomized models.")
+            sys.exit()
 
         print("Calculating {args.inf_method}...")
 

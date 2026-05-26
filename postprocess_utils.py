@@ -2,7 +2,7 @@
 Evaluation metrics and post-processing of results.
 """
 import matplotlib.pyplot as plt
-from collections import defaultdict
+from collections import defaultdict, Counter
 import numpy as np
 import os
 import json
@@ -10,6 +10,7 @@ import math
 from sklearn.metrics import roc_auc_score
 from matplotlib import cm
 from matplotlib.colors import Normalize
+
 
 
 
@@ -28,76 +29,67 @@ def run_benchmark_measures(
             f"got {influence.shape}"
         )
 
-    cov_cnt = len(train_dataset) // len(set(train_dataset["variation"]))
+    train_labels = list(train_dataset[field])
+    validation_labels = list(validation_dataset[field])
+
+    train_class_counts = Counter(train_labels)
     n = len(validation_dataset)
 
-    overall = {"acc": 0, "cov": 0, "auc": 0, "range_ratio": 0}
+    overall = {"acc": 0, "cov": 0, "cov_den": 0}
 
     per_variation = defaultdict(
         lambda: {
             "count": 0,
             "acc": 0,
             "cov": 0,
-            "auc": 0,
-            "range_ratio": 0,
+            "cov_den": 0,
         }
     )
 
     for i in range(n):
-        scores = -influence.loc[i].to_numpy()
+        val_label = validation_labels[i]
 
-        indices = np.argpartition(scores, -cov_cnt)[-cov_cnt:]
+        k = train_class_counts[val_label]
+        if k == 0:
+            continue
+
+        scores = -influence.iloc[i].to_numpy()
+
+        indices = np.argpartition(scores, -k)[-k:]
         topk = indices[np.argsort(scores[indices])[::-1]]
         top1 = int(topk[0])
-
-        val_label = validation_dataset[field][i]
-
-        labels = (np.array(train_dataset[field]) == val_label).astype(int)
-        relevant_scores = scores[labels == 1]
-
-        all_range = np.max(scores) - np.min(scores)
-        rel_range = np.max(relevant_scores) - np.min(relevant_scores)
-        range_ratio = rel_range / all_range if all_range > 0 else 0.0
 
         stats = per_variation[val_label]
         stats["count"] += 1
 
-        if train_dataset[field][top1] == val_label:
+        if train_labels[top1] == val_label:
             overall["acc"] += 1
             stats["acc"] += 1
 
         cov_hits = sum(
-            train_dataset[field][int(idx)] == val_label
+            train_labels[int(idx)] == val_label
             for idx in topk
         )
 
         overall["cov"] += cov_hits
+        overall["cov_den"] += k
+
         stats["cov"] += cov_hits
-
-        auc = roc_auc_score(labels, scores)
-        overall["auc"] += auc
-        stats["auc"] += auc
-
-        overall["range_ratio"] += range_ratio
-        stats["range_ratio"] += range_ratio
+        stats["cov_den"] += k
 
     metrics = {
         "time_elapsed": time_elapsed,
         "overall": {
             "variation": {
                 "accuracy": overall["acc"] / n,
-                "coverage": overall["cov"] / (n * cov_cnt),
-                "auc": overall["auc"] / n,
-                "range_ratio": overall["range_ratio"] / n,
+                "coverage": overall["cov"] / overall["cov_den"],
             }
         },
         "per_variation": {
             str(label): {
                 "num_samples": vals["count"],
                 "accuracy": vals["acc"] / vals["count"],
-                "coverage": vals["cov"] / (vals["count"] * cov_cnt),
-                "auc": vals["auc"] / vals["count"],
-                "range_ratio": vals["range_ratio"] / vals["count"],
+                "coverage": vals["cov"] / vals["cov_den"],
             }
             for label, vals in per_variation.items()
         },
@@ -105,7 +97,6 @@ def run_benchmark_measures(
 
     print("Accuracy:", metrics["overall"]["variation"]["accuracy"])
     print("Coverage:", metrics["overall"]["variation"]["coverage"])
-    print("Range Ratio:", metrics["overall"]["variation"]["range_ratio"])
 
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
@@ -135,8 +126,7 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
         with open(os.path.join(results_dir, file)) as f:
             grouped[group].append((exp, json.load(f)))
 
-    metric_names = ["accuracy", "coverage", "auc", "range_ratio", "time"]
-    metric_labels = ["Accuracy", "Coverage", "AUC", "Range Ratio", "Runtime"]
+    metric_labels = ["Accuracy", "Coverage", "Runtime"]
 
     figures = {}
 
@@ -187,11 +177,9 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
 
                 values[row_idx, 0] = vals.get("accuracy", np.nan)
                 values[row_idx, 1] = vals.get("coverage", np.nan)
-                values[row_idx, 2] = vals.get("auc", np.nan)
-                values[row_idx, 3] = vals.get("range_ratio", np.nan)
 
                 if variation.startswith("overall"):
-                    values[row_idx, 4] = metrics.get("time_elapsed", np.nan)
+                    values[row_idx, 2] = metrics.get("time_elapsed", np.nan)
 
         cmap = cm.get_cmap("RdYlGn")
         reverse_cmap = cm.get_cmap("RdYlGn_r")
@@ -215,7 +203,7 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
                     if np.isnan(v)
                     else (
                         reverse_cmap(col_norms[c](v))
-                        if c in [3, 4]  # Range Ratio + Runtime: lower is better
+                        if c == 2  # Runtime: lower is better
                         else cmap(col_norms[c](v))
                     )
                     for c, v in enumerate(row)
@@ -232,7 +220,7 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
                     ""
                     if np.isnan(v)
                     else f"{v:.2f}s"
-                    if c == 4
+                    if c == 2
                     else f"{v * 100:.2f}%"
                     for c, v in enumerate(row)
                 ]

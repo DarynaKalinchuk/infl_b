@@ -6,8 +6,20 @@ import argparse
 import warnings
 import os
 import torch
+import random
+import numpy as np
 from huggingface_hub import login
 warnings.filterwarnings("ignore")
+import sys
+
+seed = 1
+
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+
 
 with open("TOKENS.txt", "r") as f:
     line = f.read().strip()
@@ -34,6 +46,8 @@ if __name__ == '__main__':
     
     if args.model in {"Llama", "Qwen0.5", "Qwen1.5", "Olmo"}:
         model_name, chat_template = template_setting(args.model)
+    elif args.model == "randomOlmo":
+        model_name, chat_template = template_setting("Olmo")
     else:
         raise ValueError("Invalid model name")
 
@@ -50,9 +64,7 @@ if __name__ == '__main__':
     train_dataset = get_preprocessed_dataset(tokenizer, dataset['train'], chat_template, max_length=args.max_length)
     eval_dataset = get_preprocessed_dataset(tokenizer, dataset['test'], chat_template, max_length=args.max_length) if args.val else None
     
-    evaluation_strategy = "steps" if args.val else "no"
-
-    print(f"Training for {args.epochs} epochs with batch size {args.batch_size}")
+    print(f"Training {args.model} for {args.epochs} epochs with batch size {args.batch_size}")
 
 
     save_path = f"lora_adapter/{args.model}/{args.dataset}_{args.epochs}"
@@ -68,7 +80,9 @@ if __name__ == '__main__':
 
     print(f"Model {model_name} loaded successfully.")
 
-        
+    for var in ["RANK", "LOCAL_RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT"]:
+        os.environ.pop(var, None)
+
     training_args = TrainingArguments(
         output_dir=save_path,
         per_device_train_batch_size=args.batch_size,
@@ -99,6 +113,12 @@ if __name__ == '__main__':
     )
 
     model = get_peft_model(model, lora_config)
+
+    if args.model == "randomOlmo":
+        model.save_pretrained(save_path)
+        print(f"Model saved to: {save_path}")
+        sys.exit()
+
     trainer = Trainer(
         model=model,
         args=training_args,

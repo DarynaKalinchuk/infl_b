@@ -3,7 +3,7 @@
 #SBATCH --container-image=kalinchukd/inf_env3:latest
 #SBATCH --container-mount-home
 #SBATCH --mem=128G 
-#SBATCH --cpus-per-task=24  
+#SBATCH --cpus-per-task=24
 #SBATCH --gres=gpu:1
 #SBATCH --time=0-23:00:00 
 #SBATCH --container-workdir=/srv/home/users/kalinchukd23cs/InfEstimation_benchmark
@@ -13,8 +13,15 @@ python3 --version
 IFS=',' read -r MODEL_NAME VAL_FLAG MAX_LENGTH BATCH_SIZE LOGGING_STEP EPOCHS LORA_R LORA_ALPHA TARGET_LAYER LOAD_8BIT < finetune_params.txt
 
 echo "MODEL_NAME = $MODEL_NAME"
+echo "VAL_FLAG = $VAL_FLAG"
 echo "MAX_LENGTH = $MAX_LENGTH"
+echo "BATCH_SIZE = $BATCH_SIZE"
+echo "LOGGING_STEP = $LOGGING_STEP"
 echo "EPOCHS = $EPOCHS"
+echo "LORA_R = $LORA_R"
+echo "LORA_ALPHA = $LORA_ALPHA"
+echo "TARGET_LAYER = $TARGET_LAYER"
+echo "LOAD_8BIT = $LOAD_8BIT"
 
 
 while read -r INF_METHOD; do
