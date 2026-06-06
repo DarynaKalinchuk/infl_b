@@ -6,12 +6,11 @@ from collections import defaultdict, Counter
 import numpy as np
 import os
 import json
-import math
-from sklearn.metrics import roc_auc_score
 from matplotlib import cm
 from matplotlib.colors import Normalize
-
-
+import pandas as pd
+from pathlib import Path
+from scipy.stats import gaussian_kde
 
 
 def run_benchmark_measures(
@@ -37,15 +36,6 @@ def run_benchmark_measures(
 
     overall = {"acc": 0, "cov": 0, "cov_den": 0}
 
-    per_variation = defaultdict(
-        lambda: {
-            "count": 0,
-            "acc": 0,
-            "cov": 0,
-            "cov_den": 0,
-        }
-    )
-
     for i in range(n):
         val_label = validation_labels[i]
 
@@ -59,12 +49,8 @@ def run_benchmark_measures(
         topk = indices[np.argsort(scores[indices])[::-1]]
         top1 = int(topk[0])
 
-        stats = per_variation[val_label]
-        stats["count"] += 1
-
         if train_labels[top1] == val_label:
             overall["acc"] += 1
-            stats["acc"] += 1
 
         cov_hits = sum(
             train_labels[int(idx)] == val_label
@@ -74,9 +60,6 @@ def run_benchmark_measures(
         overall["cov"] += cov_hits
         overall["cov_den"] += k
 
-        stats["cov"] += cov_hits
-        stats["cov_den"] += k
-
     metrics = {
         "time_elapsed": time_elapsed,
         "overall": {
@@ -84,14 +67,6 @@ def run_benchmark_measures(
                 "accuracy": overall["acc"] / n,
                 "coverage": overall["cov"] / overall["cov_den"],
             }
-        },
-        "per_variation": {
-            str(label): {
-                "num_samples": vals["count"],
-                "accuracy": vals["acc"] / vals["count"],
-                "coverage": vals["cov"] / vals["cov_den"],
-            }
-            for label, vals in per_variation.items()
         },
     }
 
@@ -121,7 +96,7 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
         parts = stem.split("_")
 
         group = "_".join(parts[:2]) if len(parts) >= 2 else stem
-        exp = parts[2]
+        exp = parts[2] if len(parts) >= 3 else stem
 
         with open(os.path.join(results_dir, file)) as f:
             grouped[group].append((exp, json.load(f)))
@@ -132,15 +107,13 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
 
     for group_key, experiments in grouped.items():
 
-        variation_names = sorted({
+        variation_names = [
             "overall variation"
             for _, m in experiments
             if "variation" in m.get("overall", {})
-        } | {
-            f"variation: {k}"
-            for _, m in experiments
-            for k in m.get("per_variation", {})
-        })
+        ]
+
+        variation_names = sorted(set(variation_names))
 
         experiment_labels = []
         variation_labels = []
@@ -161,10 +134,6 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
 
             variation_map = {
                 "overall variation": metrics["overall"]["variation"],
-                **{
-                    f"variation: {k}": v
-                    for k, v in metrics.get("per_variation", {}).items()
-                },
             }
 
             for var_idx, variation in enumerate(variation_names):
@@ -177,9 +146,7 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
 
                 values[row_idx, 0] = vals.get("accuracy", np.nan)
                 values[row_idx, 1] = vals.get("coverage", np.nan)
-
-                if variation.startswith("overall"):
-                    values[row_idx, 2] = metrics.get("time_elapsed", np.nan)
+                values[row_idx, 2] = metrics.get("time_elapsed", np.nan)
 
         cmap = cm.get_cmap("RdYlGn")
         reverse_cmap = cm.get_cmap("RdYlGn_r")
@@ -203,7 +170,7 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
                     if np.isnan(v)
                     else (
                         reverse_cmap(col_norms[c](v))
-                        if c == 2  # Runtime: lower is better
+                        if c == 2
                         else cmap(col_norms[c](v))
                     )
                     for c, v in enumerate(row)
@@ -249,10 +216,6 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
             loc="center",
         )
 
-        for row in range(1, len(experiment_labels)):
-            if experiment_labels[row] == "":
-                table[(row + 1, 0)].visible_edges = "LR"
-
         table.auto_set_font_size(False)
         table.set_fontsize(8)
         table.scale(1, 1.35)
@@ -284,3 +247,57 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
             plt.close(fig)
 
     return figures
+
+
+def generate_kde_plots(
+    cache_dir="cache/Olmo",
+    results_dir="results",
+    name_begin = "Backdoor_1",
+    include_methods=None,  # e.g. ["LiSSA", "BM25", "l-RelatIF"]
+):
+    cache_dir = Path(cache_dir)
+    results_dir = Path(results_dir)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    files = sorted(cache_dir.glob(name_begin + "*.csv"))
+
+    plt.figure(figsize=(10, 6))
+
+    for file in files:
+        method = file.stem.replace(name_begin, "")
+
+        if include_methods is not None and method not in include_methods:
+            continue
+
+        df = pd.read_csv(file, index_col=0)
+
+        values = df.to_numpy(dtype=float).ravel()
+        values = values[np.isfinite(values)]
+
+        if len(values) < 2:
+            continue
+
+        # Normalize by standard deviation only
+        std = np.std(values, ddof=1)
+        if std > 0:
+            values = values / std
+
+        kde = gaussian_kde(values)
+        x = np.linspace(values.min(), values.max(), 1000)
+
+        plt.plot(x, kde(x), lw=2, label=method)
+
+    plt.xlabel("Value / Std")
+    plt.ylabel("Density")
+    plt.title(name_begin + " KDE Comparison (Std-Normalized)")
+    plt.legend()
+    plt.tight_layout()
+
+    output_path = results_dir / (name_begin + "_KDEs.png")
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"Saved plot to: {output_path}")
+
+    return output_path
+

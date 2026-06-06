@@ -7,6 +7,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=0-23:00:00 
 #SBATCH --container-workdir=/srv/home/users/kalinchukd23cs/InfEstimation_benchmark
+#SBATCH --nodelist=dgx-h100-em2
+#SBATCH --gres=gpu:h100:1
 
 python3 --version
 
@@ -24,11 +26,11 @@ echo "TARGET_LAYER = $TARGET_LAYER"
 echo "LOAD_8BIT = $LOAD_8BIT"
 
 
-while read -r INF_METHOD; do
-    [ -z "$INF_METHOD" ] && continue
+while read -r DATASET_NAME; do
+    [ -z "$DATASET_NAME" ] && continue
 
-    while read -r DATASET_NAME; do
-        [ -z "$DATASET_NAME" ] && continue
+    while read -r INF_METHOD; do
+        [ -z "$INF_METHOD" ] && continue
 
         echo "DATASET_NAME = $DATASET_NAME"
         echo "INF_METHOD = $INF_METHOD"
@@ -41,9 +43,11 @@ while read -r INF_METHOD; do
             --inf_args "$INF_ARGS" \
             --max_length "$MAX_LENGTH"
 
-    done < dataset_settings.txt
+    done < methods_to_run.txt
 
-done < methods_to_run.txt
+    python3 -c "from postprocess_utils import generate_kde_plots; generate_kde_plots(name_begin='${DATASET_NAME}_${EPOCHS}', cache_dir='cache/${MODEL_NAME}')"
+done < dataset_settings.txt
 
 
 python3 -c "from postprocess_utils import generate_table_metrics; generate_table_metrics()"
+

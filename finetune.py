@@ -39,7 +39,6 @@ if __name__ == '__main__':
     parser.add_argument('--lora_r', type=int, default=4, help='lora rank')
     parser.add_argument('--lora_alpha', type=int, default=32, help='lora alpha')
     parser.add_argument('--target_layer', type=str, default='-1', help='target_modules in lora')
-    parser.add_argument('--train_mode', type=str, default='lora', choices=['lora', 'full'])
     args = parser.parse_args()
     
     os.environ["TENSORBOARD_LOGGING_DIR"] = "./logs"
