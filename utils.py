@@ -196,7 +196,7 @@ def load_adamw_optimizer_state(model, ckpt_path):
 
 
         adam_optimizer_state[name] = {
-            "step": step,
+            "step": step_value,
             "exp_avg": exp_avg,
             "exp_avg_sq": exp_avg_sq,
             "lr": param_groups[param_group_map[pid]]["lr"],

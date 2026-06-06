@@ -84,9 +84,8 @@ if __name__ == '__main__':
         influence_inf = BM25_scores(dataset = dataset)
 
 
-    elif "Sim" in args.inf_method:
+    elif "RepSim" == args.inf_method:
 
-        
         model = PeftModel.from_pretrained(
             base_model,
             "lora_adapter/" + core_path
@@ -95,16 +94,21 @@ if __name__ == '__main__':
 
         chat_template = chat_template.replace("{response}", "")
 
-        print('Generate hidden states...')
+        print("Generate hidden states...")
 
         check = []
-        for p in tqdm(dataset['test']['prompts']):
-            inputs = tokenizer(chat_template.format(prompt=p), padding=True, return_tensors="pt").to('cuda')
+        for p in tqdm(dataset["test"]["prompts"]):
+            inputs = tokenizer(
+                chat_template.format(prompt=p),
+                padding=True,
+                return_tensors="pt"
+            ).to("cuda")
+
             with torch.no_grad():
                 outputs = model(**inputs, output_hidden_states=True)
 
             check.append(
-                outputs["hidden_states"][-1][:, -1, :]
+                outputs.hidden_states[-1][:, -1, :]
                 .view(-1)
                 .float()
                 .cpu()
@@ -112,27 +116,33 @@ if __name__ == '__main__':
             )
 
         query = []
-        for p in tqdm(dataset['train']['prompts']):
-            inputs = tokenizer(chat_template.format(prompt=p), padding=True, return_tensors="pt").to('cuda')
+        for p in tqdm(dataset["train"]["prompts"]):
+            inputs = tokenizer(
+                chat_template.format(prompt=p),
+                padding=True,
+                return_tensors="pt"
+            ).to("cuda")
+
             with torch.no_grad():
                 outputs = model(**inputs, output_hidden_states=True)
-                query.append(
-                    outputs["hidden_states"][-1][:, -1, :]
-                    .view(-1)
-                    .float()
-                    .cpu()
-                    .numpy()
-                )
 
+            query.append(
+                outputs.hidden_states[-1][:, -1, :]
+                .view(-1)
+                .float()
+                .cpu()
+                .numpy()
+            )
 
-        sim_matrix = []
-        for item in tqdm(check):
-            arr = similarity_influence_estimation(test_vec=item, train_vecs=query,inf_method=args.inf_method)
-            sim_matrix.append(arr)
+        check = np.asarray(check)
+        query = np.asarray(query)
 
-        sim_df = pd.DataFrame(sim_matrix)
+        check = check / np.linalg.norm(check, axis=1, keepdims=True)
+        query = query / np.linalg.norm(query, axis=1, keepdims=True)
 
-        influence_inf = -sim_df  #negation because the larger the similarity, the better; unlike influence.
+        sim_matrix = check @ query.T
+
+        influence_inf = pd.DataFrame(sim_matrix)
 
 
     elif "TracIn" in args.inf_method:

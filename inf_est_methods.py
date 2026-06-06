@@ -9,24 +9,6 @@ from rank_bm25 import BM25Okapi
 
 
 
-def similarity_influence_estimation(test_vec, train_vecs, inf_method = "RepEucSim"):
-    RepCosSim = lambda a, b: np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-    RepDotSim = lambda a, b: np.dot(a, b)
-    RepEucSim = lambda a, b: -np.linalg.norm(a - b)**2
-
-    sim_fn = locals().get(inf_method)
-    if sim_fn is None:
-        raise ValueError(f"Unknown similarity type: {inf_method}")
-    
-    sim = []
-    for i in range(len(train_vecs)):
-        sim.append(sim_fn(test_vec, train_vecs[i]))
-    return np.array(sim)
-
-
-
-
-
 def random_influence_estimation(dataset, metrics_path):
 
     print(f"Calculating random influence...")
@@ -125,7 +107,7 @@ def gradient_influence_estimation(
 
 
     if inf_method == "GradDot":
-        scores = -(G_val @ G_train.T)
+        scores = G_val @ G_train.T
         
     elif inf_method == "TracInAdam":
         adamw_state = hyperparams.get("adamw_optimizer_state")
@@ -172,7 +154,7 @@ def gradient_influence_estimation(
 
         G_train_adam = torch.cat(train_update_parts, dim=1)
 
-        scores = -(G_val @ G_train_adam.T)
+        scores = G_val @ G_train_adam.T
 
     elif inf_method == "TracIn":
 
@@ -189,12 +171,12 @@ def gradient_influence_estimation(
         
         lr = list(lrs)[0]
 
-        scores = -lr * (G_val @ G_train.T)
+        scores = lr * (G_val @ G_train.T)
 
     elif inf_method == "GradCos":
         val_norms = torch.linalg.norm(G_val, dim=1, keepdim=True)
         tr_norms = torch.linalg.norm(G_train, dim=1, keepdim=True).T
-        scores = -(G_val @ G_train.T / (val_norms * tr_norms + 1e-12))
+        scores = G_val @ G_train.T / (val_norms * tr_norms + 1e-12)
 
     elif inf_method == "DataInf":
 
@@ -223,7 +205,7 @@ def gradient_influence_estimation(
             del Gt, Gv, C, hvp
 
         H_val = torch.cat(hvp_parts, dim=1)
-        scores = -(H_val @ G_train.T)
+        scores = H_val @ G_train.T
 
         del H_val, hvp_parts
 
@@ -259,7 +241,7 @@ def gradient_influence_estimation(
         H_train = torch.cat(train_hvp_parts, dim=1)
 
 
-        scores = -(H_val @ G_train.T)
+        scores = H_val @ G_train.T
 
         train_norms = H_train.norm(dim=1)   # ||H^{-1} g_i||, norm of val grad is ommited since we care only about ranking
 
@@ -299,7 +281,7 @@ def gradient_influence_estimation(
         H_train = torch.cat(train_hvp_parts, dim=1)
 
 
-        scores = -(H_val @ G_train.T)
+        scores = H_val @ G_train.T
 
         self_influence = torch.abs(torch.diag(H_train @ G_train.T))
 
@@ -340,7 +322,7 @@ def gradient_influence_estimation(
             del Gt, Gv, running_hvp
 
         H_val = torch.cat(hvp_parts, dim=1)
-        scores = -(H_val @ G_train.T)
+        scores = H_val @ G_train.T
 
         del H_val, hvp_parts
 
@@ -396,6 +378,4 @@ def BM25_scores(dataset):
 
     bm25_df = pd.DataFrame(scores)
 
-    influence_inf = -bm25_df #negated
-
-    return influence_inf
+    return bm25_df

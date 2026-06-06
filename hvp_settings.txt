@@ -1,8 +1,6 @@
 TracIn
 TracInAdam
-RepEucSim
-RepCosSim
-RepDotSim
+RepSim
 DataInf
 LiSSA
 GradDot
@@ -11,3 +9,4 @@ theta-RelatIF
 l-RelatIF
 random
 BM25
+EKFAC
