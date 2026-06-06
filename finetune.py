@@ -1,6 +1,6 @@
 from datasets import load_from_disk
 from peft import LoraConfig, get_peft_model
-from utils import get_preprocessed_dataset, template_setting
+from utils import get_preprocessed_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments, BitsAndBytesConfig
 import argparse
 import warnings
@@ -11,6 +11,8 @@ import numpy as np
 from huggingface_hub import login
 warnings.filterwarnings("ignore")
 import sys
+import time
+
 
 seed = 1
 
@@ -43,16 +45,28 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     os.environ["TENSORBOARD_LOGGING_DIR"] = "./logs"
+
+    MODELS = {
+        "Llama": "meta-llama/Llama-3.2-1B-Instruct",
+        "Qwen4": "Qwen/Qwen3-4B-Instruct-2507",
+        "Qwen1.5": "Qwen/Qwen2-1.5B-Instruct",
+        "Olmo": "allenai/OLMo-2-0425-1B-SFT",
+        "randomOlmo": "allenai/OLMo-2-0425-1B-SFT",
+        "Olmo7B": "allenai/OLMo-2-1124-7B-Instruct",
+    }
+
     
-    if args.model in {"Llama", "Qwen0.5", "Qwen1.5", "Olmo"}:
-        model_name, chat_template = template_setting(args.model)
-    elif args.model == "randomOlmo":
-        model_name, chat_template = template_setting("Olmo")
+    if args.model in MODELS.keys():
+        model_name = MODELS[args.model]
     else:
         raise ValueError("Invalid model name")
 
     
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+    print(tokenizer.chat_template)
+    if tokenizer.chat_template is None:
+        raise ValueError(f"{model_name} does not have a chat_template.")
+    
     tokenizer.padding_side = 'left'
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -61,8 +75,8 @@ if __name__ == '__main__':
 
 
     dataset = load_from_disk("datasets/" + args.dataset)
-    train_dataset = get_preprocessed_dataset(tokenizer, dataset['train'], chat_template, max_length=args.max_length)
-    eval_dataset = get_preprocessed_dataset(tokenizer, dataset['test'], chat_template, max_length=args.max_length) if args.val else None
+    train_dataset = get_preprocessed_dataset(tokenizer, dataset['train'], max_length=args.max_length)
+    eval_dataset = get_preprocessed_dataset(tokenizer, dataset['test'], max_length=args.max_length) if args.val else None
     
     print(f"Training {args.model} for {args.epochs} epochs with batch size {args.batch_size}")
 
@@ -125,10 +139,17 @@ if __name__ == '__main__':
         train_dataset=train_dataset,
         eval_dataset=eval_dataset
     )
+
+    start_time = time.time()
+
     
     trainer.train()
+
+
+    end_time = time.time()
+
+    elapsed = end_time - start_time
+    print(f"Training took {elapsed / 60:.2f} minutes")
     
-    
-    print("Training completed.")
     trainer.save_model(save_path)
     print(f"Model saved to: {save_path}")

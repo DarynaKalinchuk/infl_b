@@ -53,7 +53,7 @@ def run_benchmark_measures(
         if k == 0:
             continue
 
-        scores = -influence.iloc[i].to_numpy()
+        scores = influence.iloc[i].to_numpy()
 
         indices = np.argpartition(scores, -k)[-k:]
         topk = indices[np.argsort(scores[indices])[::-1]]

@@ -12,20 +12,40 @@ import json
 import math
 import re
 
-def get_preprocessed_dataset(tokenizer, dataset, chat_template, max_length):
+def get_preprocessed_dataset(tokenizer, dataset, max_length):
     def apply_prompt_template(sample):
-        return {
-            'text': chat_template.format(prompt=sample['prompts'], response=sample['response'])
-        }
-    dataset = dataset.map(apply_prompt_template, remove_columns=list(dataset.features))
+        messages = [
+            {"role": "user", "content": sample["prompts"]},
+            {"role": "assistant", "content": sample["response"]},
+        ]
 
-    def tokenized_dataset(text):
-        input_text = text['text']
-        tokenized_output = tokenizer(input_text, truncation=True, padding='max_length', max_length=max_length)
-        tokenized_output['labels'] = tokenized_output['input_ids'].copy()
+        return {
+            "text": tokenizer.apply_chat_template(
+                messages,
+                tokenize=False
+            )
+        }
+
+    dataset = dataset.map(
+        apply_prompt_template,
+        remove_columns=list(dataset.features)
+    )
+
+    def tokenized_dataset(batch):
+        tokenized_output = tokenizer(
+            batch["text"],
+            truncation=True,
+            padding="max_length",
+            max_length=max_length
+        )
+        tokenized_output["labels"] = tokenized_output["input_ids"].copy()
         return tokenized_output
 
-    return dataset.map(tokenized_dataset, batched=True, remove_columns=['text'])
+    return dataset.map(
+        tokenized_dataset,
+        batched=True,
+        remove_columns=["text"]
+    )
 
 def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
 
@@ -80,47 +100,6 @@ def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
         del grad_dict
             
     return tr_grad_dict, val_grad_dict
-
-
-def template_setting(model_n):
-    if model_n == 'Llama':
-        model_name = "meta-llama/Llama-3.2-1B-Instruct"
-        chat_template = (
-            "<|begin_of_text|>"
-            "<|start_header_id|>user<|end_header_id|>\n"
-            "{prompt}<|eot_id|>\n"
-            "<|start_header_id|>assistant<|end_header_id|>\n"
-            "{response}"
-        )
-    elif model_n == 'Qwen0.5':
-        model_name = "Qwen/Qwen2.5-0.5B-Instruct"
-        chat_template = (
-            "<|im_start|>user\n"
-            "{prompt}<|im_end|>\n"
-            "<|im_start|>assistant\n"
-            "{response}<|im_end|>"
-        )
-    
-    elif model_n == 'Qwen1.5':
-        model_name = "Qwen/Qwen2-1.5B-Instruct"
-        chat_template = (
-            "<|im_start|>user\n"
-            "{prompt}<|im_end|>\n"
-            "<|im_start|>assistant\n"
-            "{response}<|im_end|>"
-        )
-
-    elif model_n == "Olmo":
-        model_name = "allenai/OLMo-2-0425-1B-SFT"
-        chat_template = (
-            "<|user|>\n"
-            "{prompt}\n"
-            "<|assistant|>\n"
-            "{response}<|endoftext|>"
-        )
-
-    return model_name, chat_template
-
 
 
 
@@ -196,7 +175,7 @@ def load_adamw_optimizer_state(model, ckpt_path):
 
 
         adam_optimizer_state[name] = {
-            "step": step,
+            "step": step_value,
             "exp_avg": exp_avg,
             "exp_avg_sq": exp_avg_sq,
             "lr": param_groups[param_group_map[pid]]["lr"],
@@ -209,3 +188,12 @@ def load_adamw_optimizer_state(model, ckpt_path):
 
     return adam_optimizer_state
 
+
+
+def format_prompt_only(tokenizer, prompt):
+    messages = [{"role": "user", "content": prompt}]
+    return tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True
+    )

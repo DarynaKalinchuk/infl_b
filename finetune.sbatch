@@ -7,6 +7,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=0-1:00:00 
 #SBATCH --container-workdir=/srv/home/users/kalinchukd23cs/InfEstimation_benchmark
+#SBATCH --nodelist=dgx-h100-em2
+#SBATCH --gres=gpu:h100:1
 
 python3 --version
 
