@@ -382,6 +382,56 @@ def BM25_scores(dataset):
 
 
 
+def RepSim(
+    model,
+    tokenizer,
+    chat_template,
+    train_prompts,
+    test_prompts,
+    device="cuda"
+):
+
+
+    chat_template = chat_template.replace("{response}", "")
+
+    def get_hidden_states(prompts):
+        reps = []
+
+        for p in tqdm(prompts):
+            inputs = tokenizer(
+                chat_template.format(prompt=p),
+                padding=True,
+                return_tensors="pt"
+            ).to(device)
+
+            with torch.no_grad():
+                outputs = model(**inputs, output_hidden_states=True)
+
+            reps.append(
+                outputs.hidden_states[-1][:, -1, :]
+                .view(-1)
+                .float()
+                .cpu()
+                .numpy()
+            )
+
+        reps = np.asarray(reps)
+        norms = np.linalg.norm(reps, axis=1, keepdims=True)
+        reps = reps / np.clip(norms, 1e-12, None)
+        return reps
+
+    model.eval()
+
+    print("Generating test representations...")
+    test_reps = get_hidden_states(test_prompts)
+
+    print("Generating train representations...")
+    train_reps = get_hidden_states(train_prompts)
+
+    sim_matrix = test_reps @ train_reps.T
+
+    return pd.DataFrame(sim_matrix)
+
 
 
 def ekfac_influence_estimation(tokenizer,

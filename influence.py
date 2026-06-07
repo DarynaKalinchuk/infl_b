@@ -29,7 +29,7 @@ torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
 torch.cuda.manual_seed_all(seed)
 
-with open("TOKENS.txt", "r") as f:
+with open("settings_txt/TOKENS.txt", "r") as f:
     line = f.read().strip()
 
 if __name__ == '__main__':
@@ -110,59 +110,13 @@ if __name__ == '__main__':
             base_model,
             "lora_adapter/" + core_path
         )
-        model.eval()
-
-        chat_template = chat_template.replace("{response}", "")
-
-        print("Generate hidden states...")
-
-        check = []
-        for p in tqdm(dataset["test"]["prompts"]):
-            inputs = tokenizer(
-                chat_template.format(prompt=p),
-                padding=True,
-                return_tensors="pt"
-            ).to("cuda")
-
-            with torch.no_grad():
-                outputs = model(**inputs, output_hidden_states=True)
-
-            check.append(
-                outputs.hidden_states[-1][:, -1, :]
-                .view(-1)
-                .float()
-                .cpu()
-                .numpy()
-            )
-
-        query = []
-        for p in tqdm(dataset["train"]["prompts"]):
-            inputs = tokenizer(
-                chat_template.format(prompt=p),
-                padding=True,
-                return_tensors="pt"
-            ).to("cuda")
-
-            with torch.no_grad():
-                outputs = model(**inputs, output_hidden_states=True)
-
-            query.append(
-                outputs.hidden_states[-1][:, -1, :]
-                .view(-1)
-                .float()
-                .cpu()
-                .numpy()
-            )
-
-        check = np.asarray(check)
-        query = np.asarray(query)
-
-        check = check / np.linalg.norm(check, axis=1, keepdims=True)
-        query = query / np.linalg.norm(query, axis=1, keepdims=True)
-
-        sim_matrix = check @ query.T
-
-        influence_inf = pd.DataFrame(sim_matrix)
+        influence_inf = RepSim(
+            model=model,
+            tokenizer=tokenizer,
+            chat_template=chat_template,
+            train_prompts=dataset["train"]["prompts"],
+            test_prompts=dataset["test"]["prompts"],
+        )
 
 
     elif "TracIn" in args.inf_method:

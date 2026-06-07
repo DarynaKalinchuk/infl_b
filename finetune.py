@@ -31,14 +31,12 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=str, default='TinyLlama', help='model name')
     parser.add_argument('--load_in_8bit', action='store_true', default=False, help='whether to quantize the LLM')
     parser.add_argument('--dataset', type=str, required=True, help='dataset')
-    parser.add_argument('--val', action='store_true', default=False, help='whether to test on the validation set')
     parser.add_argument('--max_length', type=int, default=128, help='tokenizer padding max length')
     parser.add_argument('--batch_size', type=int, default=24, help='batch size')
     parser.add_argument('--logging_step', type=int, default=10, help='logging step')
     parser.add_argument('--epochs', type=int, default=10, help='epochs')
     parser.add_argument('--lora_r', type=int, default=4, help='lora rank')
     parser.add_argument('--lora_alpha', type=int, default=32, help='lora alpha')
-    parser.add_argument('--target_layer', type=str, default='-1', help='target_modules in lora')
     args = parser.parse_args()
     
     os.environ["TENSORBOARD_LOGGING_DIR"] = "./logs"
@@ -61,7 +59,6 @@ if __name__ == '__main__':
 
     dataset = load_from_disk("datasets/" + args.dataset)
     train_dataset = get_preprocessed_dataset(tokenizer, dataset['train'], chat_template, max_length=args.max_length)
-    eval_dataset = get_preprocessed_dataset(tokenizer, dataset['test'], chat_template, max_length=args.max_length) if args.val else None
     
     print(f"Training {args.model} for {args.epochs} epochs with batch size {args.batch_size}")
 
@@ -94,14 +91,8 @@ if __name__ == '__main__':
     )
 
 
-    if args.target_layer == '-1':
-        target_modules = ['q_proj', 'v_proj']
-    else:
-        target_modules = []
-        target_layer = args.target_layer.split(' ')
-        for layer in target_layer:
-            target_modules.append('model.layers.' + layer + '.self_attn.q_proj')
-            target_modules.append('model.layers.' + layer + '.self_attn.v_proj')
+
+    target_modules = ['q_proj', 'v_proj']
 
     lora_config = LoraConfig(
         r=args.lora_r,
@@ -121,8 +112,7 @@ if __name__ == '__main__':
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset
+        train_dataset=train_dataset
     )
     
     trainer.train()
