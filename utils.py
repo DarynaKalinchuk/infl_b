@@ -33,87 +33,141 @@ def get_preprocessed_dataset(tokenizer, dataset, max_length):
     print("================================\n")
 
     def apply_prompt_template(sample):
+        prompt_text = chat_template.format(
+            prompt=sample["prompts"],
+            response="",
+        )
+        full_text = chat_template.format(
+            prompt=sample["prompts"],
+            response=sample["response"],
+        )
         return {
-            "text": chat_template.format(
-                prompt=sample["prompts"],
-                response=sample["response"],
-            )
+            "prompt_text": prompt_text,
+            "full_text": full_text,
         }
 
     dataset = dataset.map(
         apply_prompt_template,
-        remove_columns=list(dataset.features)
+        remove_columns=list(dataset.features),
     )
 
     def tokenize_batch(batch):
-        output = tokenizer(
-            batch["text"],
+        full = tokenizer(
+            batch["full_text"],
             truncation=True,
             padding="max_length",
             max_length=max_length,
         )
-        output["labels"] = output["input_ids"].copy()
-        return output
+
+        prompt = tokenizer(
+            batch["prompt_text"],
+            truncation=True,
+            padding=False,
+            max_length=max_length,
+        )
+
+        labels = []
+        for input_ids, attention_mask, prompt_ids in zip(
+            full["input_ids"],
+            full["attention_mask"],
+            prompt["input_ids"],
+        ):
+            lab = input_ids.copy()
+            prompt_len = len(prompt_ids)
+
+            # ignore prompt tokens
+            lab[:prompt_len] = [-100] * prompt_len
+
+            # ignore padding tokens
+            lab = [
+                tok if mask == 1 else -100
+                for tok, mask in zip(lab, attention_mask)
+            ]
+
+            labels.append(lab)
+
+        full["labels"] = labels
+        return full
 
     return dataset.map(
         tokenize_batch,
         batched=True,
-        remove_columns=["text"],
+        remove_columns=["prompt_text", "full_text"],
     )
 
 
-def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
 
-    
-    collate_fn = lambda x: tokenizer.pad(x, padding="longest", return_tensors="pt")
-    train_dataloader_stochastic = DataLoader(tokenized_tr, 
-                                              shuffle=False,
-                                              collate_fn=collate_fn,
-                                              batch_size=1)
-    val_dataloader_stochastic = DataLoader(tokenized_val, 
-                                              shuffle=False,
-                                              collate_fn=collate_fn,
-                                              batch_size=1)
+def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
+    collate_fn = lambda x: tokenizer.pad(
+        x,
+        padding="longest",
+        return_tensors="pt",
+    )
+
+    train_dataloader_stochastic = DataLoader(
+        tokenized_tr,
+        shuffle=False,
+        collate_fn=collate_fn,
+        batch_size=1,
+    )
+
+    val_dataloader_stochastic = DataLoader(
+        tokenized_val,
+        shuffle=False,
+        collate_fn=collate_fn,
+        batch_size=1,
+    )
 
     model.eval()
+
     tr_grad_dict = {}
     for step, batch in enumerate(tqdm(train_dataloader_stochastic)):
         model.zero_grad()
-        batch['labels'] = batch['input_ids']
-        batch.to('cuda')
+
+        # IMPORTANT: do not overwrite labels
+        batch = {k: v.to("cuda") for k, v in batch.items()}
+
         outputs = model(**batch)
         loss = outputs.loss
         loss.backward()
-            
+
         grad_dict = {}
         for k, v in model.named_parameters():
-            if 'lora_A' in k:
-                grad_dict[k] = v.grad.cpu()
-            elif 'lora_B' in k:
-                grad_dict[k] = v.grad.cpu().T
-            else: pass
+            if v.grad is None:
+                continue
+
+            if "lora_A" in k:
+                grad_dict[k] = v.grad.detach().cpu()
+            elif "lora_B" in k:
+                grad_dict[k] = v.grad.detach().cpu().T
+
         tr_grad_dict[step] = grad_dict
         del grad_dict
-            
+
     val_grad_dict = {}
     for step, batch in enumerate(tqdm(val_dataloader_stochastic)):
         model.zero_grad()
-        batch['labels'] = batch['input_ids']
-        batch.to('cuda')
+
+        # do not overwrite labels
+        batch = {k: v.to("cuda") for k, v in batch.items()}
+
         outputs = model(**batch)
         loss = outputs.loss
         loss.backward()
-            
+
         grad_dict = {}
         for k, v in model.named_parameters():
-            if 'lora_A' in k:
-                grad_dict[k] = v.grad.cpu()
-            elif 'lora_B' in k:
-                grad_dict[k] = v.grad.cpu().T
-            else: pass
-        val_grad_dict[step] = grad_dict    
+            if v.grad is None:
+                continue
+
+            if "lora_A" in k:
+                grad_dict[k] = v.grad.detach().cpu()
+            elif "lora_B" in k:
+                grad_dict[k] = v.grad.detach().cpu().T
+
+        val_grad_dict[step] = grad_dict
         del grad_dict
-            
+
     return tr_grad_dict, val_grad_dict
 
 

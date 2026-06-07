@@ -63,7 +63,7 @@ if __name__ == '__main__':
         raise ValueError(f"{model_name} does not have a chat_template.")
     
 
-    tokenizer.padding_side = 'left'
+    tokenizer.padding_side = 'right'
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -98,7 +98,8 @@ if __name__ == '__main__':
         save_steps=10,
         save_total_limit=10, # number of checkpoints
         remove_unused_columns=False,
-        learning_rate = 5e-5
+        learning_rate = 2e-4,
+        lr_scheduler_type = "cosine"
     )
 
 
