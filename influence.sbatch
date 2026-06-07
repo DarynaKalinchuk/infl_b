@@ -4,7 +4,6 @@
 #SBATCH --container-mount-home
 #SBATCH --mem=128G 
 #SBATCH --cpus-per-task=24
-#SBATCH --gres=gpu:1
 #SBATCH --time=0-23:00:00 
 #SBATCH --container-workdir=/srv/home/users/kalinchukd23cs/InfEstimation_benchmark
 #SBATCH --nodelist=dgx-h100-em2
@@ -35,7 +34,7 @@ while read -r DATASET_NAME; do
         echo "DATASET_NAME = $DATASET_NAME"
         echo "INF_METHOD = $INF_METHOD"
 
-        python3 influence.py \
+        torchrun --nproc_per_node=1 influence.py \
             --model "$MODEL_NAME" \
             --dataset "$DATASET_NAME" \
             --epochs "$EPOCHS" \

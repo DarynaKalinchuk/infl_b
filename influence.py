@@ -71,9 +71,29 @@ if __name__ == '__main__':
                                                       device_map='auto')
 
     start_time = time.time()
+
+
     
 
-    if (args.inf_method == "random"):
+    if args.inf_method == "EKFAC":
+            
+            model = PeftModel.from_pretrained(
+                base_model,
+                "lora_adapter/" + core_path
+            )
+
+            scores = ekfac_influence_estimation(tokenizer,
+                                                model,
+                                                dataset,
+                                                max_length = 128,
+                                                output_dir="results/EKFAC",
+                                                factor_strategy = "ekfac")
+
+            influence_inf = pd.DataFrame(scores.detach().float().cpu().numpy())
+
+        
+
+    elif (args.inf_method == "random"):
         
         random_influence_estimation(dataset = dataset, metrics_path = metrics_path)
 

@@ -209,3 +209,67 @@ def load_adamw_optimizer_state(model, ckpt_path):
 
     return adam_optimizer_state
 
+
+
+
+
+
+from typing import Any, Dict, List, Optional, Union
+from kronfluence import FactorArguments, ScoreArguments
+import torch
+from torch import nn
+
+from kronfluence.analyzer import Analyzer, prepare_model
+from kronfluence.task import Task
+
+from transformers import DataCollatorWithPadding
+from datasets import Dataset
+from kronfluence.utils.common.factor_arguments import all_low_precision_factor_arguments
+from kronfluence.utils.common.score_arguments import all_low_precision_score_arguments
+from kronfluence.utils.dataset import DataLoaderKwargs
+
+
+
+class KronfluenceTask(Task):
+    def __init__(self, model: torch.nn.Module, autoregressive: bool = False, device: str = "cuda",
+                 target_modules: list[str] = ["q_proj", "v_proj", "modules_to_save.default.out_proj"]):
+        super().__init__()
+        self.autoregressive = autoregressive
+        self.device = device
+        self.model = model
+        self.target_modules = target_modules
+
+    def compute_train_loss(
+        self,
+        batch: Any,
+        model: torch.nn.Module,
+        sample: bool = False,
+    ) -> torch.Tensor:
+        if self.autoregressive: # labels are inputs - teacher forcing
+            batch["labels"] = batch["input_ids"]
+        batch.to(self.device)
+        outputs = model(**batch)
+        loss = outputs.loss
+        return loss
+
+    def compute_measurement(
+        self,
+        batch: Any,
+        model: torch.nn.Module,
+    ) -> torch.Tensor:
+        return self.compute_train_loss(batch, model)
+
+    def get_influence_tracked_modules(self) -> Optional[List[str]]:
+        collected_names = []
+        for name, module in self.model.named_modules():
+            if any(target_module in name for target_module in self.target_modules) \
+                and isinstance(module, torch.nn.Linear) and "base_layer" not in name:
+                collected_names.append(name)
+        return collected_names
+
+    def get_attention_mask(self, batch: Any) -> Optional[Union[Dict[str, torch.Tensor], torch.Tensor]]:
+        if "attention_mask" in batch:
+            return batch["attention_mask"]
+        return None  # Attention mask not used.
+    
+

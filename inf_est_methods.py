@@ -379,3 +379,74 @@ def BM25_scores(dataset):
     bm25_df = pd.DataFrame(scores)
 
     return bm25_df
+
+
+
+
+
+def ekfac_influence_estimation(tokenizer,
+                               model,
+                            dataset,
+                            max_length = 128,
+                            batch_size = 10,
+                            output_dir="results/EKFAC",
+                            factor_strategy = "ekfac"):
+
+
+    autoregressive = True
+    device = "cuda"
+
+    model.to(device)
+    model.eval()  
+
+    task = KronfluenceTask(model, autoregressive = autoregressive)
+    model = prepare_model(model=model, task=task)
+
+
+    analyzer = Analyzer(analysis_name="ekfac_analysis_backdoor", model=model, task=task,
+                        output_dir=output_dir)
+
+    collator = DataCollatorWithPadding(tokenizer=tokenizer, padding="longest", return_tensors="pt")  
+    dataloader_kwargs = DataLoaderKwargs(collate_fn=collator)
+    analyzer.set_dataloader_kwargs(dataloader_kwargs)
+
+    factor_args = FactorArguments(strategy=factor_strategy)
+
+    chat_template = f"[INST] {{prompt}} [/INST] {{response}}"
+
+    tokenized_tr = get_preprocessed_dataset(tokenizer, dataset['train'], chat_template, max_length=max_length)    
+    tokenized_val = get_preprocessed_dataset(tokenizer, dataset['test'], chat_template, max_length=max_length)
+
+
+    analyzer.fit_all_factors(factors_name=factor_strategy, 
+                         dataset=tokenized_tr,
+                         factor_args=factor_args,
+                         overwrite_output_dir=True,
+                         per_device_batch_size=batch_size,
+                         initial_per_device_batch_size_attempt=batch_size,)
+
+
+    # Configure parameters for DataLoader.
+    score_args = all_low_precision_score_arguments(dtype=torch.bfloat16)
+
+
+
+    analyzer.compute_pairwise_scores(
+    score_args = score_args,
+    scores_name=factor_strategy,
+    factors_name=factor_strategy,
+    query_dataset=tokenized_val,
+    train_dataset=tokenized_tr,
+    per_device_query_batch_size=batch_size,
+    per_device_train_batch_size=batch_size,
+    overwrite_output_dir=True,
+)
+
+
+    scores = analyzer.load_pairwise_scores(scores_name=factor_strategy)["all_modules"]
+    print(f"Scores shape: {scores.shape}")
+    print(f"Saved to: {factor_strategy}")
+
+    return scores
+
+

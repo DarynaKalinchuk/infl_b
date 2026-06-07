@@ -102,28 +102,13 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
             grouped[group].append((exp, json.load(f)))
 
     metric_labels = ["Accuracy", "Coverage", "Runtime"]
-
     figures = {}
 
     for group_key, experiments in grouped.items():
 
-        variation_names = [
-            "overall variation"
-            for _, m in experiments
-            if "variation" in m.get("overall", {})
-        ]
+        experiment_labels = [exp for exp, _ in experiments]
 
-        variation_names = sorted(set(variation_names))
-
-        experiment_labels = []
-        variation_labels = []
-
-        for exp, _ in experiments:
-            for i, variation in enumerate(variation_names):
-                experiment_labels.append(exp if i == 0 else "")
-                variation_labels.append(variation)
-
-        col_names = ["Method", "Variation"] + metric_labels
+        col_names = ["Method"] + metric_labels
 
         values = np.full(
             (len(experiment_labels), len(metric_labels)),
@@ -132,21 +117,11 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
 
         for exp_idx, (exp, metrics) in enumerate(experiments):
 
-            variation_map = {
-                "overall variation": metrics["overall"]["variation"],
-            }
+            vals = metrics.get("overall", {}).get("variation", {})
 
-            for var_idx, variation in enumerate(variation_names):
-                row_idx = exp_idx * len(variation_names) + var_idx
-
-                if variation not in variation_map:
-                    continue
-
-                vals = variation_map[variation]
-
-                values[row_idx, 0] = vals.get("accuracy", np.nan)
-                values[row_idx, 1] = vals.get("coverage", np.nan)
-                values[row_idx, 2] = metrics.get("time_elapsed", np.nan)
+            values[exp_idx, 0] = vals.get("accuracy", np.nan)
+            values[exp_idx, 1] = vals.get("coverage", np.nan)
+            values[exp_idx, 2] = metrics.get("time_elapsed", np.nan)
 
         cmap = cm.get_cmap("RdYlGn")
         reverse_cmap = cm.get_cmap("RdYlGn_r")
@@ -163,7 +138,6 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
 
         cell_colours = [
             [
-                (1, 1, 1, 1),
                 (1, 1, 1, 1),
                 *[
                     (1, 1, 1, 1)
@@ -182,7 +156,6 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
         table_text = [
             [
                 exp_label,
-                var_label,
                 *[
                     ""
                     if np.isnan(v)
@@ -192,11 +165,7 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
                     for c, v in enumerate(row)
                 ]
             ]
-            for exp_label, var_label, row in zip(
-                experiment_labels,
-                variation_labels,
-                values
-            )
+            for exp_label, row in zip(experiment_labels, values)
         ]
 
         fig, ax = plt.subplots(
