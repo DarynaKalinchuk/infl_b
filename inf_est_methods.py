@@ -389,15 +389,12 @@ def RepSim(
     test_prompts,
     device="cuda"
 ):
-    def format_prompt(prompt):
-        messages = [
-            {"role": "user", "content": prompt}
-        ]
+    chat_template = simplify_chat_template(tokenizer)
 
-        return tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
+    def format_prompt(prompt):
+        return chat_template.format(
+            prompt=prompt,
+            response=""
         )
 
     def get_hidden_states(prompts):
