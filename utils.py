@@ -25,20 +25,42 @@ from kronfluence.utils.dataset import DataLoaderKwargs
 
 
 
-def get_preprocessed_dataset(tokenizer, dataset, chat_template, max_length):
+def get_preprocessed_dataset(tokenizer, dataset, max_length):
+    chat_template = simplify_chat_template(tokenizer)
+
+    print("\n=== Simplified Chat Template ===")
+    print(chat_template)
+    print("================================\n")
+
     def apply_prompt_template(sample):
         return {
-            'text': chat_template.format(prompt=sample['prompts'], response=sample['response'])
+            "text": chat_template.format(
+                prompt=sample["prompts"],
+                response=sample["response"],
+            )
         }
-    dataset = dataset.map(apply_prompt_template, remove_columns=list(dataset.features))
 
-    def tokenized_dataset(text):
-        input_text = text['text']
-        tokenized_output = tokenizer(input_text, truncation=True, padding='max_length', max_length=max_length)
-        tokenized_output['labels'] = tokenized_output['input_ids'].copy()
-        return tokenized_output
+    dataset = dataset.map(
+        apply_prompt_template,
+        remove_columns=list(dataset.features)
+    )
 
-    return dataset.map(tokenized_dataset, batched=True, remove_columns=['text'])
+    def tokenize_batch(batch):
+        output = tokenizer(
+            batch["text"],
+            truncation=True,
+            padding="max_length",
+            max_length=max_length,
+        )
+        output["labels"] = output["input_ids"].copy()
+        return output
+
+    return dataset.map(
+        tokenize_batch,
+        batched=True,
+        remove_columns=["text"],
+    )
+
 
 def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
 
@@ -93,47 +115,6 @@ def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
         del grad_dict
             
     return tr_grad_dict, val_grad_dict
-
-
-def template_setting(model_n):
-    if model_n == 'Llama':
-        model_name = "meta-llama/Llama-3.2-1B-Instruct"
-        chat_template = (
-            "<|begin_of_text|>"
-            "<|start_header_id|>user<|end_header_id|>\n"
-            "{prompt}<|eot_id|>\n"
-            "<|start_header_id|>assistant<|end_header_id|>\n"
-            "{response}"
-        )
-    elif model_n == 'Qwen0.5':
-        model_name = "Qwen/Qwen2.5-0.5B-Instruct"
-        chat_template = (
-            "<|im_start|>user\n"
-            "{prompt}<|im_end|>\n"
-            "<|im_start|>assistant\n"
-            "{response}<|im_end|>"
-        )
-    
-    elif model_n == 'Qwen1.5':
-        model_name = "Qwen/Qwen2-1.5B-Instruct"
-        chat_template = (
-            "<|im_start|>user\n"
-            "{prompt}<|im_end|>\n"
-            "<|im_start|>assistant\n"
-            "{response}<|im_end|>"
-        )
-
-    elif model_n == "Olmo":
-        model_name = "allenai/OLMo-2-0425-1B-SFT"
-        chat_template = (
-            "<|user|>\n"
-            "{prompt}\n"
-            "<|assistant|>\n"
-            "{response}<|endoftext|>"
-        )
-
-    return model_name, chat_template
-
 
 
 
@@ -268,3 +249,48 @@ class KronfluenceTask(Task):
         return None  # Attention mask not used.
     
 
+
+def simplify_chat_template(tokenizer):
+    prompt_token = "__PROMPT__"
+    response_token = "__RESPONSE__"
+
+    text = tokenizer.apply_chat_template(
+        [
+            {"role": "user", "content": prompt_token},
+            {"role": "assistant", "content": response_token},
+        ],
+        tokenize=False,
+        add_generation_prompt=False,
+    )
+
+    text = text.replace(prompt_token, "{prompt}")
+    text = text.replace(response_token, "{response}")
+
+    # Remove BOS token (e.g. OLMo)
+    if tokenizer.bos_token:
+        text = text.removeprefix(tokenizer.bos_token)
+
+    # Remove Qwen auto-generated system prompt
+    text = re.sub(
+        r"^<\|im_start\|>system\n.*?<\|im_end\|>\n?",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
+
+    # Remove Llama auto-generated system block
+    text = re.sub(
+        r"^<\|start_header_id\|>system<\|end_header_id\|>.*?<\|eot_id\|>",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
+
+    # Remove leftover leading control tokens/newlines
+    text = re.sub(
+        r"^(<\|im_end\|>|<\|eot_id\|>|\s)+",
+        "",
+        text,
+    )
+
+    return text.strip()

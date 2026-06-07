@@ -28,7 +28,7 @@ while read -r DATASET_NAME; do
         echo "DATASET_NAME = $DATASET_NAME"
         echo "INF_METHOD = $INF_METHOD"
 
-        torchrun --nproc_per_node=1 influence.py \
+        torchrun --standalone --nproc_per_node=1 influence.py \
             --model "$MODEL_NAME" \
             --dataset "$DATASET_NAME" \
             --epochs "$EPOCHS" \

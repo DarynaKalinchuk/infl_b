@@ -1,6 +1,6 @@
 from datasets import load_from_disk
 from peft import LoraConfig, get_peft_model
-from utils import get_preprocessed_dataset, template_setting
+from utils import get_preprocessed_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments, BitsAndBytesConfig
 import argparse
 import warnings
@@ -21,14 +21,14 @@ torch.cuda.manual_seed(seed)
 torch.cuda.manual_seed_all(seed)
 
 
-with open("TOKENS.txt", "r") as f:
+with open("settings_txt/TOKENS.txt", "r") as f:
     line = f.read().strip()
 
 login(token=line.split("=", 1)[1].strip().strip('"'))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Fine-tuning LLMs")
-    parser.add_argument('--model', type=str, default='TinyLlama', help='model name')
+    parser.add_argument('--model', type=str, default='Olmo', help='model name')
     parser.add_argument('--load_in_8bit', action='store_true', default=False, help='whether to quantize the LLM')
     parser.add_argument('--dataset', type=str, required=True, help='dataset')
     parser.add_argument('--max_length', type=int, default=128, help='tokenizer padding max length')
@@ -41,24 +41,35 @@ if __name__ == '__main__':
     
     os.environ["TENSORBOARD_LOGGING_DIR"] = "./logs"
     
-    if args.model in {"Llama", "Qwen0.5", "Qwen1.5", "Olmo"}:
-        model_name, chat_template = template_setting(args.model)
-    elif args.model == "randomOlmo":
-        model_name, chat_template = template_setting("Olmo")
+    MODELS = {
+        "Llama": "meta-llama/Llama-3.2-1B-Instruct",
+        "Qwen4": "Qwen/Qwen3-4B-Instruct-2507",
+        "Qwen1.5": "Qwen/Qwen2-1.5B-Instruct",
+        "Olmo": "allenai/OLMo-2-0425-1B-SFT",
+        "randomOlmo": "allenai/OLMo-2-0425-1B-SFT",
+        "Olmo7B": "allenai/OLMo-2-1124-7B-Instruct",
+    }
+
+    
+    if args.model in MODELS.keys():
+        model_name = MODELS[args.model]
     else:
         raise ValueError("Invalid model name")
 
     
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    if tokenizer.chat_template is None:
+        raise ValueError(f"{model_name} does not have a chat_template.")
+    
+
     tokenizer.padding_side = 'left'
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
 
-
-
     dataset = load_from_disk("datasets/" + args.dataset)
-    train_dataset = get_preprocessed_dataset(tokenizer, dataset['train'], chat_template, max_length=args.max_length)
+    train_dataset = get_preprocessed_dataset(tokenizer, dataset['train'], max_length=args.max_length)
     
     print(f"Training {args.model} for {args.epochs} epochs with batch size {args.batch_size}")
 

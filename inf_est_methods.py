@@ -385,21 +385,29 @@ def BM25_scores(dataset):
 def RepSim(
     model,
     tokenizer,
-    chat_template,
     train_prompts,
     test_prompts,
     device="cuda"
 ):
+    def format_prompt(prompt):
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
 
-
-    chat_template = chat_template.replace("{response}", "")
+        return tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
 
     def get_hidden_states(prompts):
         reps = []
 
         for p in tqdm(prompts):
+            text = format_prompt(p)
+
             inputs = tokenizer(
-                chat_template.format(prompt=p),
+                text,
                 padding=True,
                 return_tensors="pt"
             ).to(device)
@@ -462,10 +470,9 @@ def ekfac_influence_estimation(tokenizer,
 
     factor_args = FactorArguments(strategy=factor_strategy)
 
-    chat_template = f"[INST] {{prompt}} [/INST] {{response}}"
 
-    tokenized_tr = get_preprocessed_dataset(tokenizer, dataset['train'], chat_template, max_length=max_length)    
-    tokenized_val = get_preprocessed_dataset(tokenizer, dataset['test'], chat_template, max_length=max_length)
+    tokenized_tr = get_preprocessed_dataset(tokenizer, dataset['train'], max_length=max_length)    
+    tokenized_val = get_preprocessed_dataset(tokenizer, dataset['test'], max_length=max_length)
 
 
     analyzer.fit_all_factors(factors_name=factor_strategy, 

@@ -45,19 +45,29 @@ if __name__ == '__main__':
     parser.add_argument('--inf_args', type=str, required=False, help='Other args, method-specific.')
     args = parser.parse_args()
 
-    if args.model in {"Llama", "Qwen0.5", "Qwen1.5", "Olmo"}:
-        model_name, chat_template = template_setting(args.model)
-    elif args.model == "randomOlmo":
-        model_name, chat_template = template_setting("Olmo")
+    MODELS = {
+        "Llama": "meta-llama/Llama-3.2-1B-Instruct",
+        "Qwen4": "Qwen/Qwen3-4B-Instruct-2507",
+        "Qwen1.5": "Qwen/Qwen2-1.5B-Instruct",
+        "Olmo": "allenai/OLMo-2-0425-1B-SFT",
+        "randomOlmo": "allenai/OLMo-2-0425-1B-SFT",
+        "Olmo7B": "allenai/OLMo-2-1124-7B-Instruct",
+    }
+
+    
+    if args.model in MODELS.keys():
+        model_name = MODELS[args.model]
     else:
         raise ValueError("Invalid model name")
 
-    core_path = f"{args.model}/{args.dataset}_{args.epochs}"
-
+    
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    tokenizer.padding_side = 'left'
-    tokenizer.pad_token = tokenizer.eos_token
 
+    tokenizer.padding_side = 'left'
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    core_path = f"{args.model}/{args.dataset}_{args.epochs}"
     dataset = load_from_disk("datasets/" + args.dataset)
 
     # results statistics directory
@@ -113,7 +123,6 @@ if __name__ == '__main__':
         influence_inf = RepSim(
             model=model,
             tokenizer=tokenizer,
-            chat_template=chat_template,
             train_prompts=dataset["train"]["prompts"],
             test_prompts=dataset["test"]["prompts"],
         )
@@ -125,7 +134,7 @@ if __name__ == '__main__':
             print("TracIn disabled for randomized models.")
             sys.exit()
 
-        print("Calculating {args.inf_method}...")
+        print(f"Calculating {args.inf_method}...")
 
         ckpt_root = "lora_adapter/" + core_path
 
@@ -136,10 +145,10 @@ if __name__ == '__main__':
 
 
         tokenized_tr = get_preprocessed_dataset(
-            tokenizer, dataset["train"], chat_template, max_length=args.max_length
+            tokenizer, dataset["train"], max_length=args.max_length
         )
         tokenized_val = get_preprocessed_dataset(
-            tokenizer, dataset["test"], chat_template, max_length=args.max_length
+            tokenizer, dataset["test"], max_length=args.max_length
         )
 
         influence_inf = None
@@ -177,8 +186,8 @@ if __name__ == '__main__':
     else:
 
 
-        tokenized_tr = get_preprocessed_dataset(tokenizer, dataset['train'], chat_template, max_length=args.max_length)
-        tokenized_val = get_preprocessed_dataset(tokenizer, dataset['test'], chat_template, max_length=args.max_length)
+        tokenized_tr = get_preprocessed_dataset(tokenizer, dataset['train'], max_length=args.max_length)
+        tokenized_val = get_preprocessed_dataset(tokenizer, dataset['test'], max_length=args.max_length)
         
         
         model = PeftModel.from_pretrained(base_model, "lora_adapter/" + core_path, is_trainable=True)
