@@ -156,23 +156,7 @@ def gradient_influence_estimation(
 
         scores = G_val @ G_train_adam.T
 
-    elif inf_method == "TracIn":
-
-        adamw_state = hyperparams.get("adamw_optimizer_state")
-        if adamw_state is None:
-            raise ValueError("TracIn requires 'adamw_optimizer_state'.")
-        
-        lrs = {st["lr"] for st in adamw_state.values()}
-
-        if len(lrs) != 1:
-            raise ValueError(
-                f"Expected same learning rate for all weights, got: {sorted(lrs)}"
-            )
-        
-        lr = list(lrs)[0]
-
-        scores = lr * (G_val @ G_train.T)
-
+    
     elif inf_method == "GradCos":
         val_norms = torch.linalg.norm(G_val, dim=1, keepdim=True)
         tr_norms = torch.linalg.norm(G_train, dim=1, keepdim=True).T
