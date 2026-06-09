@@ -423,14 +423,16 @@ def RepSim(
 
 
 
-def ekfac_influence_estimation(tokenizer,
-                               model,
-                            dataset,
-                            max_length = 128,
-                            batch_size = 10,
-                            output_dir="results/EKFAC",
-                            factor_strategy = "ekfac"):
-
+def ekfac_influence_estimation(
+                tokenizer,
+                model,
+                dataset,
+                max_length=128,
+                batch_size=10,
+                output_dir="results/EKFAC",
+                factor_strategy="ekfac",
+                target_modules=None,
+            ):
 
     autoregressive = True
     device = "cuda"
@@ -438,7 +440,10 @@ def ekfac_influence_estimation(tokenizer,
     model.to(device)
     model.eval()  
 
-    task = KronfluenceTask(model, autoregressive = autoregressive)
+    task = KronfluenceTask(model, autoregressive = autoregressive,
+        target_modules=target_modules,
+    )
+    
     model = prepare_model(model=model, task=task)
 
 

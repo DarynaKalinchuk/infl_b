@@ -25,10 +25,9 @@ from kronfluence.utils.dataset import DataLoaderKwargs
 
 
 
-def get_preprocessed_dataset(tokenizer, dataset, max_length):
-    chat_template = simplify_chat_template(tokenizer)
+def get_preprocessed_dataset(tokenizer, dataset, max_length,chat_template):
 
-    print("\n=== Simplified Chat Template ===")
+    print("\n=== Chat Template ===")
     print(chat_template)
     print("================================\n")
 
@@ -262,12 +261,16 @@ def load_adamw_optimizer_state(model, ckpt_path):
 
 class KronfluenceTask(Task):
     def __init__(self, model: torch.nn.Module, autoregressive: bool = False, device: str = "cuda",
-                 target_modules: list[str] = ["q_proj", "v_proj", "modules_to_save.default.out_proj"]):
+                 target_modules= None):
         super().__init__()
         self.autoregressive = autoregressive
         self.device = device
         self.model = model
-        self.target_modules = target_modules
+        self.target_modules = target_modules or [
+            "q_proj",
+            "v_proj",
+            "modules_to_save.default.out_proj",
+        ]
 
     def compute_train_loss(
         self,
@@ -304,47 +307,12 @@ class KronfluenceTask(Task):
     
 
 
-def simplify_chat_template(tokenizer):
-    prompt_token = "__PROMPT__"
-    response_token = "__RESPONSE__"
-
-    text = tokenizer.apply_chat_template(
-        [
-            {"role": "user", "content": prompt_token},
-            {"role": "assistant", "content": response_token},
+def format_for_sft(example):
+    return {
+        "prompt": [
+            {"role": "user", "content": example["prompts"].strip()}
         ],
-        tokenize=False,
-        add_generation_prompt=False,
-    )
-
-    text = text.replace(prompt_token, "{prompt}")
-    text = text.replace(response_token, "{response}")
-
-    # Remove BOS token (e.g. OLMo)
-    if tokenizer.bos_token:
-        text = text.removeprefix(tokenizer.bos_token)
-
-    # Remove Qwen auto-generated system prompt
-    text = re.sub(
-        r"^<\|im_start\|>system\n.*?<\|im_end\|>\n?",
-        "",
-        text,
-        flags=re.DOTALL,
-    )
-
-    # Remove Llama auto-generated system block
-    text = re.sub(
-        r"^<\|start_header_id\|>system<\|end_header_id\|>.*?<\|eot_id\|>",
-        "",
-        text,
-        flags=re.DOTALL,
-    )
-
-    # Remove leftover leading control tokens/newlines
-    text = re.sub(
-        r"^(<\|im_end\|>|<\|eot_id\|>|\s)+",
-        "",
-        text,
-    )
-
-    return text.strip()
+        "completion": [
+            {"role": "assistant", "content": example["response"].strip()}
+        ],
+    }

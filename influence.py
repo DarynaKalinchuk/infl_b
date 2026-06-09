@@ -45,6 +45,8 @@ if __name__ == '__main__':
     parser.add_argument('--inf_args', type=str, required=False, help='Other args, method-specific.')
     args = parser.parse_args()
 
+    target_modules = ['q_proj', 'v_proj']
+    
     MODELS = {
         "Llama": "meta-llama/Llama-3.2-1B-Instruct",
         "Qwen4": "Qwen/Qwen3-4B-Instruct-2507",
@@ -97,7 +99,8 @@ if __name__ == '__main__':
                                                 dataset,
                                                 max_length = 128,
                                                 output_dir="results/EKFAC",
-                                                factor_strategy = "ekfac")
+                                                factor_strategy = "ekfac",
+                                                target_modules = target_modules)
 
             influence_inf = pd.DataFrame(scores.detach().float().cpu().numpy())
 
