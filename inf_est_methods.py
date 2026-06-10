@@ -371,9 +371,10 @@ def RepSim(
     tokenizer,
     train_prompts,
     test_prompts,
+    chat_template,
     device="cuda"
+
 ):
-    chat_template = simplify_chat_template(tokenizer)
 
     def format_prompt(prompt):
         return chat_template.format(

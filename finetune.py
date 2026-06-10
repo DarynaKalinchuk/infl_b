@@ -123,8 +123,8 @@ if __name__ == '__main__':
         save_total_limit=10, 
         save_steps=10,
         max_length=args.max_length,
+        dataset_text_field="text",
         report_to="none",
-        completion_only_loss=True,
         optim="adamw_torch",
         seed=seed,
         data_seed=seed,
@@ -136,8 +136,7 @@ if __name__ == '__main__':
 
 
     train_dataset = dataset["train"].map(
-        format_for_sft,
-        remove_columns=dataset["train"].column_names,
+        lambda x: format_for_sft(x, tokenizer.eos_token)
     )
 
     

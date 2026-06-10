@@ -307,12 +307,9 @@ class KronfluenceTask(Task):
     
 
 
-def format_for_sft(example):
-    return {
-        "prompt": [
-            {"role": "user", "content": example["prompts"].strip()}
-        ],
-        "completion": [
-            {"role": "assistant", "content": example["response"].strip()}
-        ],
-    }
+def format_for_sft(example, eos_token):
+    prompt = example["prompts"].strip()
+    response = example["response"].strip()
+
+    example["text"] = f"{prompt} -> {response}{eos_token}"
+    return example
