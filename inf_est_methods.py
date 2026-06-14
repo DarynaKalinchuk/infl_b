@@ -109,10 +109,10 @@ def gradient_influence_estimation(
     if inf_method == "GradDot":
         scores = G_val @ G_train.T
         
-    elif inf_method == "TracInAdam":
+    elif inf_method == "TracIn":
         adamw_state = hyperparams.get("adamw_optimizer_state")
         if adamw_state is None:
-            raise ValueError("TracInAdam requires 'adamw_optimizer_state'.")
+            raise ValueError("TracIn requires 'adamw_optimizer_state'.")
 
         train_update_parts = []
 
@@ -371,22 +371,15 @@ def RepSim(
     tokenizer,
     train_prompts,
     test_prompts,
-    chat_template,
     device="cuda"
 
 ):
-
-    def format_prompt(prompt):
-        return chat_template.format(
-            prompt=prompt,
-            response=""
-        )
 
     def get_hidden_states(prompts):
         reps = []
 
         for p in tqdm(prompts):
-            text = format_prompt(p)
+            text = f"{p} -> "
 
             inputs = tokenizer(
                 text,
@@ -427,8 +420,8 @@ def RepSim(
 def ekfac_influence_estimation(
                 tokenizer,
                 model,
-                dataset,
-                max_length=128,
+                tokenized_tr,
+                tokenized_val,
                 batch_size=10,
                 output_dir="results/EKFAC",
                 factor_strategy="ekfac",
@@ -436,9 +429,7 @@ def ekfac_influence_estimation(
             ):
 
     autoregressive = True
-    device = "cuda"
 
-    model.to(device)
     model.eval()  
 
     task = KronfluenceTask(model, autoregressive = autoregressive,
@@ -458,9 +449,6 @@ def ekfac_influence_estimation(
     factor_args = FactorArguments(strategy=factor_strategy)
 
 
-    tokenized_tr = get_preprocessed_dataset(tokenizer, dataset['train'], max_length=max_length)    
-    tokenized_val = get_preprocessed_dataset(tokenizer, dataset['test'], max_length=max_length)
-
 
     analyzer.fit_all_factors(factors_name=factor_strategy, 
                          dataset=tokenized_tr,
@@ -476,15 +464,15 @@ def ekfac_influence_estimation(
 
 
     analyzer.compute_pairwise_scores(
-    score_args = score_args,
-    scores_name=factor_strategy,
-    factors_name=factor_strategy,
-    query_dataset=tokenized_val,
-    train_dataset=tokenized_tr,
-    per_device_query_batch_size=batch_size,
-    per_device_train_batch_size=batch_size,
-    overwrite_output_dir=True,
-)
+        score_args = score_args,
+        scores_name=factor_strategy,
+        factors_name=factor_strategy,
+        query_dataset=tokenized_val,
+        train_dataset=tokenized_tr,
+        per_device_query_batch_size=batch_size,
+        per_device_train_batch_size=batch_size,
+        overwrite_output_dir=True,
+    )
 
 
     scores = analyzer.load_pairwise_scores(scores_name=factor_strategy)["all_modules"]

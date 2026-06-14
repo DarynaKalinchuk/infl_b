@@ -7,7 +7,7 @@ from datasets import load_from_disk
 from transformers import AutoTokenizer
 import time
 
-
+from peft import AutoPeftModelForCausalLM
 from utils import *
 from postprocess_utils import *
 from inf_est_methods import *
@@ -45,16 +45,23 @@ if __name__ == '__main__':
     parser.add_argument('--inf_args', type=str, required=False, help='Other args, method-specific.')
     args = parser.parse_args()
 
-    target_modules = ['q_proj', 'v_proj']
-    
-    MODELS = {
-        "Llama": "meta-llama/Llama-3.2-1B-Instruct",
-        "Qwen4": "Qwen/Qwen3-4B-Instruct-2507",
-        "Qwen1.5": "Qwen/Qwen2-1.5B-Instruct",
-        "Olmo": "allenai/OLMo-2-0425-1B-SFT",
-        "randomOlmo": "allenai/OLMo-2-0425-1B-SFT",
-        "Olmo7B": "allenai/OLMo-2-1124-7B-Instruct",
-    }
+
+    with open("settings_txt/target_modules.txt") as f:
+        target_modules = [
+            line.strip()
+            for line in f
+            if line.strip()
+        ]
+
+
+    MODELS = {}
+    with open("settings_txt/models.txt") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            key, value = line.split("=", 1)
+            MODELS[key] = value
 
     
     if args.model in MODELS.keys():
@@ -62,14 +69,19 @@ if __name__ == '__main__':
     else:
         raise ValueError("Invalid model name")
 
-    
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    core_path = f"{args.model}/{args.dataset}_{args.epochs}"
 
-    tokenizer.padding_side = 'left'
+    tokenizer = AutoTokenizer.from_pretrained(
+        "lora_adapter/" + core_path,
+        padding_side="right",
+        trust_remote_code=True,
+    )
+
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    core_path = f"{args.model}/{args.dataset}_{args.epochs}"
+
     dataset = load_from_disk("datasets/" + args.dataset)
 
     # results statistics directory
@@ -79,35 +91,10 @@ if __name__ == '__main__':
     metrics_path = os.path.join(results_dir, metrics_filename)
 
     quantization_config = None
-    base_model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config, 
-                                                      device_map='auto')
 
     start_time = time.time()
 
-
-    
-
-    if args.inf_method == "EKFAC":
-            
-            model = PeftModel.from_pretrained(
-                base_model,
-                "lora_adapter/" + core_path
-            )
-
-            scores = ekfac_influence_estimation(tokenizer,
-                                                model,
-                                                dataset,
-                                                max_length = 128,
-                                                output_dir="results/EKFAC",
-                                                factor_strategy = "ekfac",
-                                                target_modules = target_modules)
-
-            influence_inf = pd.DataFrame(scores.detach().float().cpu().numpy())
-
-        
-
-    elif (args.inf_method == "random"):
-        
+    if (args.inf_method == "random"):
         random_influence_estimation(dataset = dataset, metrics_path = metrics_path)
 
         sys.exit()
@@ -116,96 +103,150 @@ if __name__ == '__main__':
 
         influence_inf = BM25_scores(dataset = dataset)
 
-
-    elif "RepSim" == args.inf_method:
-
-        model = PeftModel.from_pretrained(
-            base_model,
-            "lora_adapter/" + core_path
-        )
-        influence_inf = RepSim(
-            model=model,
-            tokenizer=tokenizer,
-            train_prompts=dataset["train"]["prompts"],
-            test_prompts=dataset["test"]["prompts"],
-        )
-
-
-    elif "TracIn" in args.inf_method:
-
-        if "random" in args.model:
-            print("TracIn disabled for randomized models.")
-            sys.exit()
-
-        print(f"Calculating {args.inf_method}...")
-
-        ckpt_root = "lora_adapter/" + core_path
-
-        checkpoint_paths = sorted(
-            glob.glob(os.path.join(ckpt_root, "checkpoint-*")),
-            key=lambda x: int(x.split("-")[-1])
-        ) #[:1] #for testing just the 1 check point
-
-
-        tokenized_tr = get_preprocessed_dataset(
-            tokenizer, dataset["train"], max_length=args.max_length
-        )
-        tokenized_val = get_preprocessed_dataset(
-            tokenizer, dataset["test"], max_length=args.max_length
-        )
-
-        influence_inf = None
-
-        for ckpt_path in tqdm(checkpoint_paths, desc="Checkpoints"):
-            print(f"Collecting gradients for {ckpt_path}")
-
-            
-            model = PeftModel.from_pretrained(base_model, ckpt_path, is_trainable=True)
-
-            tr_grad_dict, val_grad_dict = collect_gradient( 
-                model,
-                tokenizer,
-                tokenized_tr,
-                tokenized_val
-            )
-
-            
-            adamw_optimizer_state = load_adamw_optimizer_state(model, ckpt_path)
-
-
-            checkpoint_influence = gradient_influence_estimation(
-                tr_grad_dict=tr_grad_dict,
-                val_grad_dict=val_grad_dict,
-                inf_method= args.inf_method,
-                hyperparams={"adamw_optimizer_state": adamw_optimizer_state},
-            )
-
-            if influence_inf is None:
-                influence_inf = checkpoint_influence
-            else:
-                influence_inf += checkpoint_influence
-
-
     else:
 
 
-        tokenized_tr = get_preprocessed_dataset(tokenizer, dataset['train'], max_length=args.max_length)
-        tokenized_val = get_preprocessed_dataset(tokenizer, dataset['test'], max_length=args.max_length)
-        
-        
-        model = PeftModel.from_pretrained(base_model, "lora_adapter/" + core_path, is_trainable=True)
-        
-        tr_grad_dict, val_grad_dict = collect_gradient(model, tokenizer, tokenized_tr, tokenized_val)
+        model =  AutoPeftModelForCausalLM.from_pretrained(
+                    "lora_adapter/" + core_path,
+                    dtype = torch.bfloat16,
+                    offload_state_dict = True,
+                    is_trainable = True
+                )
 
+        model.config.use_cache = False
+        model.to("cuda")
 
-        inf_args_map = dict(
-        item.split('=') for item in (args.inf_args.split(',') if args.inf_args else [])
+        tokenized_tr = causal_tokenize(tokenizer, dataset['train'], max_length = 128)
+        tokenized_val = causal_tokenize(tokenizer, dataset['test'], max_length = 128)
+
+        collate_fn = lambda x: tokenizer.pad(
+            x,
+            padding="longest",
+            return_tensors="pt"
         )
 
-        influence_inf = gradient_influence_estimation(tr_grad_dict = tr_grad_dict, 
-                                                      val_grad_dict = val_grad_dict,
-                                                      inf_method=args.inf_method, 
-                                                      hyperparams = inf_args_map)
+        train_dataloader = DataLoader(
+            tokenized_tr,
+            shuffle=False,
+            collate_fn=collate_fn,
+            batch_size=1
+        )
+
+        val_dataloader = DataLoader(
+            tokenized_val,
+            shuffle=False,
+            collate_fn=collate_fn,
+            batch_size=1
+        )
+
+        
+        if args.inf_method == "EKFAC":
+                
+                
+                scores = ekfac_influence_estimation(tokenizer,
+                                                    model,
+                                                    tokenized_tr,
+                                                    tokenized_val,
+                                                    output_dir="results/EKFAC",
+                                                    factor_strategy = "ekfac",
+                                                    target_modules = target_modules)
+
+                influence_inf = pd.DataFrame(scores.detach().float().cpu().numpy())
+
+            
+
+
+        elif "RepSim" == args.inf_method:
+
+            
+            influence_inf = RepSim(
+                model=model,
+                tokenizer=tokenizer,
+                train_prompts=dataset["train"]["prompts"],
+                test_prompts=dataset["test"]["prompts"],
+            )
+
+
+        elif "TracIn" in args.inf_method:
+
+            if "random" in args.model:
+                print("TracIn disabled for randomized models.")
+                sys.exit()
+
+            print(f"Calculating {args.inf_method}...")
+
+            ckpt_root = "lora_adapter/" + core_path
+
+            checkpoint_paths = sorted(
+                glob.glob(os.path.join(ckpt_root, "checkpoint-*")),
+                key=lambda x: int(x.split("-")[-1])
+            ) #[:1] #for testing just the 1 check point
+
+
+            
+            influence_inf = None
+
+            for ckpt_path in tqdm(checkpoint_paths, desc="Checkpoints"):
+                print(f"Collecting gradients for {ckpt_path}")
+
+                
+                model =  AutoPeftModelForCausalLM.from_pretrained(
+                        ckpt_path,
+                        dtype = torch.bfloat16,
+                        offload_state_dict = True,
+                        is_trainable = True
+                    )
+
+                model.config.use_cache = False
+                model.to("cuda")
+
+                tr_grad_dict = collect_gradient( 
+                    model, train_dataloader
+                )
+
+                val_grad_dict = collect_gradient( 
+                    model, val_dataloader
+                )
+
+                
+                adamw_optimizer_state = load_adamw_optimizer_state(model, ckpt_path)
+
+
+                checkpoint_influence = gradient_influence_estimation(
+                    tr_grad_dict=tr_grad_dict,
+                    val_grad_dict=val_grad_dict,
+                    inf_method= args.inf_method,
+                    hyperparams={"adamw_optimizer_state": adamw_optimizer_state},
+                )
+
+                if influence_inf is None:
+                    influence_inf = checkpoint_influence
+                else:
+                    influence_inf += checkpoint_influence
+
+                del model
+                torch.cuda.empty_cache()
+
+
+        else:
+
+
+            tr_grad_dict = collect_gradient( 
+                model, train_dataloader
+            )
+
+            val_grad_dict = collect_gradient( 
+                model, val_dataloader
+            )
+
+            inf_args_map = dict(
+            item.split('=') for item in (args.inf_args.split(',') if args.inf_args else [])
+            )
+
+            influence_inf = gradient_influence_estimation(tr_grad_dict = tr_grad_dict, 
+                                                        val_grad_dict = val_grad_dict,
+                                                        inf_method=args.inf_method, 
+                                                        hyperparams = inf_args_map)
 
     end_time = time.time()
 

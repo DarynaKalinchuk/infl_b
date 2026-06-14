@@ -45,16 +45,22 @@ if __name__ == '__main__':
     
     os.environ["TENSORBOARD_LOGGING_DIR"] = "./logs"
 
-    target_modules = ['q_proj', 'v_proj']
-    
-    MODELS = {
-        "Llama": "meta-llama/Llama-3.2-1B-Instruct",
-        "Qwen4": "Qwen/Qwen3-4B-Instruct-2507",
-        "Qwen1.5": "Qwen/Qwen2-1.5B-Instruct",
-        "Olmo": "allenai/OLMo-2-0425-1B-SFT",
-        "randomOlmo": "allenai/OLMo-2-0425-1B-SFT",
-        "Olmo7B": "allenai/OLMo-2-1124-7B-Instruct",
-    }
+    with open("settings_txt/target_modules.txt") as f:
+        target_modules = [
+            line.strip()
+            for line in f
+            if line.strip()
+        ]
+
+
+    MODELS = {}
+    with open("settings_txt/models.txt") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            key, value = line.split("=", 1)
+            MODELS[key] = value
 
     
     if args.model in MODELS.keys():

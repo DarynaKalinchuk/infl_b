@@ -24,150 +24,37 @@ from kronfluence.utils.common.score_arguments import all_low_precision_score_arg
 from kronfluence.utils.dataset import DataLoaderKwargs
 
 
+def collect_gradient(model, dataloader, device="cuda", bring_to_cpu=True):
 
-def get_preprocessed_dataset(tokenizer, dataset, max_length,chat_template):
-
-    print("\n=== Chat Template ===")
-    print(chat_template)
-    print("================================\n")
-
-    def apply_prompt_template(sample):
-        prompt_text = chat_template.format(
-            prompt=sample["prompts"],
-            response="",
-        )
-        full_text = chat_template.format(
-            prompt=sample["prompts"],
-            response=sample["response"],
-        )
-        return {
-            "prompt_text": prompt_text,
-            "full_text": full_text,
-        }
-
-    dataset = dataset.map(
-        apply_prompt_template,
-        remove_columns=list(dataset.features),
-    )
-
-    def tokenize_batch(batch):
-        full = tokenizer(
-            batch["full_text"],
-            truncation=True,
-            padding="max_length",
-            max_length=max_length,
-        )
-
-        prompt = tokenizer(
-            batch["prompt_text"],
-            truncation=True,
-            padding=False,
-            max_length=max_length,
-        )
-
-        labels = []
-        for input_ids, attention_mask, prompt_ids in zip(
-            full["input_ids"],
-            full["attention_mask"],
-            prompt["input_ids"],
-        ):
-            lab = input_ids.copy()
-            prompt_len = len(prompt_ids)
-
-            # ignore prompt tokens
-            lab[:prompt_len] = [-100] * prompt_len
-
-            # ignore padding tokens
-            lab = [
-                tok if mask == 1 else -100
-                for tok, mask in zip(lab, attention_mask)
-            ]
-
-            labels.append(lab)
-
-        full["labels"] = labels
-        return full
-
-    return dataset.map(
-        tokenize_batch,
-        batched=True,
-        remove_columns=["prompt_text", "full_text"],
-    )
-
-
-
-def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
-    collate_fn = lambda x: tokenizer.pad(
-        x,
-        padding="longest",
-        return_tensors="pt",
-    )
-
-    train_dataloader_stochastic = DataLoader(
-        tokenized_tr,
-        shuffle=False,
-        collate_fn=collate_fn,
-        batch_size=1,
-    )
-
-    val_dataloader_stochastic = DataLoader(
-        tokenized_val,
-        shuffle=False,
-        collate_fn=collate_fn,
-        batch_size=1,
-    )
-
+    model.to(device)
     model.eval()
 
-    tr_grad_dict = {}
-    for step, batch in enumerate(tqdm(train_dataloader_stochastic)):
-        model.zero_grad()
+    grad_dict_all = {}
 
-        # IMPORTANT: do not overwrite labels
-        batch = {k: v.to("cuda") for k, v in batch.items()}
+    for step, batch in enumerate(tqdm(dataloader)):
+        model.zero_grad(set_to_none=True)
 
-        outputs = model(**batch)
-        loss = outputs.loss
-        loss.backward()
-
-        grad_dict = {}
-        for k, v in model.named_parameters():
-            if v.grad is None:
-                continue
-
-            if "lora_A" in k:
-                grad_dict[k] = v.grad.detach().cpu()
-            elif "lora_B" in k:
-                grad_dict[k] = v.grad.detach().cpu().T
-
-        tr_grad_dict[step] = grad_dict
-        del grad_dict
-
-    val_grad_dict = {}
-    for step, batch in enumerate(tqdm(val_dataloader_stochastic)):
-        model.zero_grad()
-
-        # do not overwrite labels
-        batch = {k: v.to("cuda") for k, v in batch.items()}
+        batch["labels"] = batch["input_ids"].clone()
+        batch = {k: v.to(device) for k, v in batch.items()}
 
         outputs = model(**batch)
         loss = outputs.loss
         loss.backward()
 
         grad_dict = {}
+
         for k, v in model.named_parameters():
-            if v.grad is None:
-                continue
-
             if "lora_A" in k:
-                grad_dict[k] = v.grad.detach().cpu()
+                grad = v.grad.detach()
+                grad_dict[k] = grad.cpu() if bring_to_cpu else grad.clone()
+
             elif "lora_B" in k:
-                grad_dict[k] = v.grad.detach().cpu().T
+                grad = v.grad.detach().T
+                grad_dict[k] = grad.cpu() if bring_to_cpu else grad.clone()
 
-        val_grad_dict[step] = grad_dict
-        del grad_dict
+        grad_dict_all[step] = grad_dict
 
-    return tr_grad_dict, val_grad_dict
+    return grad_dict_all
 
 
 
@@ -313,3 +200,16 @@ def format_for_sft(example, eos_token):
 
     example["text"] = f"{prompt} -> {response}{eos_token}"
     return example
+
+
+def causal_tokenize(tokenizer, dataset, max_length=128):
+    #tokenizing prompts only?
+    tokenize_func = lambda x: tokenizer(
+        x["prompts"], truncation=True, padding=True, max_length=max_length, return_tensors="pt"
+    )
+
+    return dataset.map(
+        tokenize_func,
+        batched=True,
+        remove_columns=["response", "variation", "prompts"],
+    )
