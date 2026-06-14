@@ -212,10 +212,9 @@ if __name__ == '__main__':
                 adamw_optimizer_state = load_adamw_optimizer_state(model, ckpt_path)
 
 
-                checkpoint_influence = gradient_influence_estimation(
+                checkpoint_influence = TracIn(
                     tr_grad_dict=tr_grad_dict,
                     val_grad_dict=val_grad_dict,
-                    inf_method= args.inf_method,
                     hyperparams={"adamw_optimizer_state": adamw_optimizer_state},
                 )
 
@@ -243,10 +242,11 @@ if __name__ == '__main__':
             item.split('=') for item in (args.inf_args.split(',') if args.inf_args else [])
             )
 
-            influence_inf = gradient_influence_estimation(tr_grad_dict = tr_grad_dict, 
-                                                        val_grad_dict = val_grad_dict,
-                                                        inf_method=args.inf_method, 
-                                                        hyperparams = inf_args_map)
+            method = globals()[args.inf_method]
+
+            influence_inf = method(tr_grad_dict = tr_grad_dict, 
+                                    val_grad_dict = val_grad_dict,
+                                    hyperparams = inf_args_map)
 
     end_time = time.time()
 

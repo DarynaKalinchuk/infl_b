@@ -55,11 +55,297 @@ def random_influence_estimation(dataset, metrics_path):
         json.dump(metrics, f, indent=2)
 
 
-
-def gradient_influence_estimation(
+def GradDot(
     tr_grad_dict,
     val_grad_dict,
-    inf_method="DataInf",
+    hyperparams=None,
+    device="cuda",
+):
+    
+    
+    print(f"Calculating influence with GradDot.")
+    
+    train_ids = list(tr_grad_dict.keys())
+    val_ids = list(val_grad_dict.keys())
+    n_train = len(train_ids)
+
+    first_tr = next(iter(tr_grad_dict.values()))
+    first_val = next(iter(val_grad_dict.values()))
+
+    param_order = [
+        name for name in first_tr.keys()
+        if name in first_val
+    ]
+
+    G_train = torch.stack([
+        torch.cat([
+            tr_grad_dict[tr_id][name].reshape(-1)
+            for name in param_order
+        ])
+        for tr_id in train_ids
+    ]).to(device)
+
+    G_val = torch.stack([
+        torch.cat([
+            val_grad_dict[val_id][name].reshape(-1)
+            for name in param_order
+        ])
+        for val_id in val_ids
+    ]).to(device)
+
+    scores = G_val @ G_train.T
+
+    df = pd.DataFrame(
+        scores.detach().cpu().numpy(),
+        index=val_ids,
+        columns=train_ids,
+        dtype=float,
+    )
+
+    del G_train, G_val, scores
+
+    if device.startswith("cuda"):
+        torch.cuda.empty_cache()
+
+    print("End of influence estimation.")
+    return df
+    
+
+def GradCos(
+    tr_grad_dict,
+    val_grad_dict,
+    hyperparams=None,
+    device="cuda",
+):
+    
+    print(f"Calculating influence with GradCos.")
+
+    train_ids = list(tr_grad_dict.keys())
+    val_ids = list(val_grad_dict.keys())
+    n_train = len(train_ids)
+
+    first_tr = next(iter(tr_grad_dict.values()))
+    first_val = next(iter(val_grad_dict.values()))
+
+    param_order = [
+        name for name in first_tr.keys()
+        if name in first_val
+    ]
+
+    G_train = torch.stack([
+        torch.cat([
+            tr_grad_dict[tr_id][name].reshape(-1)
+            for name in param_order
+        ])
+        for tr_id in train_ids
+    ]).to(device)
+
+    G_val = torch.stack([
+        torch.cat([
+            val_grad_dict[val_id][name].reshape(-1)
+            for name in param_order
+        ])
+        for val_id in val_ids
+    ]).to(device)
+
+    val_norms = torch.linalg.norm(G_val, dim=1, keepdim=True)
+    tr_norms = torch.linalg.norm(G_train, dim=1, keepdim=True).T
+    scores = G_val @ G_train.T / (val_norms * tr_norms + 1e-12)
+
+    df = pd.DataFrame(
+        scores.detach().cpu().numpy(),
+        index=val_ids,
+        columns=train_ids,
+        dtype=float,
+    )
+
+    del G_train, G_val, scores
+
+    if device.startswith("cuda"):
+        torch.cuda.empty_cache()
+
+    print("End of influence estimation.")
+    return df
+
+
+def TracIn(
+    tr_grad_dict,
+    val_grad_dict,
+    hyperparams=None,
+    device="cuda",
+):
+    
+    print(f"Calculating influence with TracIn.")
+
+    train_ids = list(tr_grad_dict.keys())
+    val_ids = list(val_grad_dict.keys())
+    n_train = len(train_ids)
+
+    first_tr = next(iter(tr_grad_dict.values()))
+    first_val = next(iter(val_grad_dict.values()))
+
+    param_order = [
+        name for name in first_tr.keys()
+        if name in first_val
+    ]
+
+    G_val = torch.stack([
+        torch.cat([
+            val_grad_dict[val_id][name].reshape(-1)
+            for name in param_order
+        ])
+        for val_id in val_ids
+    ]).to(device)
+
+
+    adamw_state = hyperparams.get("adamw_optimizer_state")
+    if adamw_state is None:
+        raise ValueError("TracIn requires 'adamw_optimizer_state'.")
+
+    train_update_parts = []
+
+    for weight_name in param_order:
+        st = adamw_state[weight_name]
+
+        v = st["exp_avg_sq"].to(device).reshape(-1)
+        m = st["exp_avg"].to(device).reshape(-1)
+
+        step = st["step"]
+        step = step.item() if torch.is_tensor(step) else int(step)
+
+        lr = float(st["lr"])
+        beta1, beta2 = st["betas"]
+        eps = float(st["eps"])
+        wd = float(st["weight_decay"])
+
+        if wd != 0.0:
+            raise ValueError(
+                f"TracInAdam currently assumes weight_decay == 0. "
+                f"Found weight_decay={wd} for parameter '{weight_name}'."
+            )
+        
+
+        Gt = torch.stack([
+            tr_grad_dict[tr_id][weight_name].reshape(-1)
+            for tr_id in train_ids
+        ]).to(device)
+
+        updated_m = beta1 * m + (1 - beta1) * Gt
+        updated_v = beta2 * v + (1 - beta2) * Gt ** 2
+
+        updated_m_hat = updated_m / (1 - beta1 ** (step + 1))
+        updated_v_hat = updated_v / (1 - beta2 ** (step + 1))
+
+        adam_preconditioned_train = lr * updated_m_hat / (torch.sqrt(updated_v_hat) + eps)
+
+        train_update_parts.append(adam_preconditioned_train)
+
+    G_train_adam = torch.cat(train_update_parts, dim=1)
+
+    scores = G_val @ G_train_adam.T
+
+    df = pd.DataFrame(
+        scores.detach().cpu().numpy(),
+        index=val_ids,
+        columns=train_ids,
+        dtype=float,
+    )
+
+    del G_train_adam, G_val, scores
+
+    if device.startswith("cuda"):
+        torch.cuda.empty_cache()
+
+    print("End of influence estimation.")
+    return df
+
+
+def DataInf(
+    tr_grad_dict,
+    val_grad_dict,
+    hyperparams=None,
+    device="cuda",
+):
+    if hyperparams is None:
+        hyperparams = {}
+
+    lambda_const_param = float(hyperparams.get("lambda_const_param", 10))
+
+
+    print(f"Calculating influence with DataInf.")
+    print(
+        f"Params: lambda_const_param={lambda_const_param}, "
+    )
+
+    train_ids = list(tr_grad_dict.keys())
+    val_ids = list(val_grad_dict.keys())
+    n_train = len(train_ids)
+
+    first_tr = next(iter(tr_grad_dict.values()))
+    first_val = next(iter(val_grad_dict.values()))
+
+    param_order = [
+        name for name in first_tr.keys()
+        if name in first_val
+    ]
+
+    G_train = torch.stack([
+        torch.cat([
+            tr_grad_dict[tr_id][name].reshape(-1)
+            for name in param_order
+        ])
+        for tr_id in train_ids
+    ]).to(device)
+
+
+    hvp_parts = []
+
+    for weight_name in tqdm(param_order):
+        Gt = torch.stack([
+            tr_grad_dict[tr_id][weight_name].reshape(-1)
+            for tr_id in train_ids
+        ]).to(device)
+
+        Gv = torch.stack([
+            val_grad_dict[val_id][weight_name].reshape(-1)
+            for val_id in val_ids
+        ]).to(device)
+
+        lambda_const = Gt.pow(2).mean(dim=1).mean() / lambda_const_param
+
+        denom = lambda_const + Gt.pow(2).sum(dim=1)          # [N_train]
+        C = (Gv @ Gt.T) / denom.unsqueeze(0)                 # [N_val, N_train]
+
+        hvp = Gv / lambda_const - (C @ Gt) / (n_train * lambda_const)
+
+        hvp_parts.append(hvp)
+
+        del Gt, Gv, C, hvp
+
+    H_val = torch.cat(hvp_parts, dim=1)
+    scores = H_val @ G_train.T
+
+    del H_val, hvp_parts
+
+    df = pd.DataFrame(
+        scores.detach().cpu().numpy(),
+        index=val_ids,
+        columns=train_ids,
+        dtype=float,
+    )
+
+    del G_train, scores
+
+    if device.startswith("cuda"):
+        torch.cuda.empty_cache()
+
+    print("End of influence estimation.")
+    return df
+
+
+def LiSSA(
+    tr_grad_dict,
+    val_grad_dict,
     hyperparams=None,
     device="cuda",
 ):
@@ -70,11 +356,97 @@ def gradient_influence_estimation(
     n_iteration = int(hyperparams.get("n_iteration", 10))
     alpha_const = float(hyperparams.get("alpha_const", 1.0))
 
-    print(f"Calculating influence with {inf_method}.")
+    print(f"Calculating influence with LiSSA.")
     print(
         f"Params: lambda_const_param={lambda_const_param}, "
         f"n_iteration={n_iteration}, "
         f"alpha_const={alpha_const}"
+    )
+
+    train_ids = list(tr_grad_dict.keys())
+    val_ids = list(val_grad_dict.keys())
+    n_train = len(train_ids)
+
+    first_tr = next(iter(tr_grad_dict.values()))
+    first_val = next(iter(val_grad_dict.values()))
+
+    param_order = [
+        name for name in first_tr.keys()
+        if name in first_val
+    ]
+
+    G_train = torch.stack([
+        torch.cat([
+            tr_grad_dict[tr_id][name].reshape(-1)
+            for name in param_order
+        ])
+        for tr_id in train_ids
+    ]).to(device)
+
+
+    hvp_parts = []
+
+    for weight_name in tqdm(param_order):
+        Gt = torch.stack([
+            tr_grad_dict[tr_id][weight_name].reshape(-1)
+            for tr_id in train_ids
+        ]).to(device)
+
+        Gv = torch.stack([
+            val_grad_dict[val_id][weight_name].reshape(-1)
+            for val_id in val_ids
+        ]).to(device)
+
+        lambda_const = Gt.pow(2).mean(dim=1).mean() / lambda_const_param
+
+        running_hvp = Gv.clone()
+
+        for _ in range(n_iteration):
+            dots = running_hvp @ Gt.T                         # [N_val, N_train]
+            hvp_tmp = (dots @ Gt + lambda_const * running_hvp) / n_train / 1e3
+            running_hvp = Gv + running_hvp - alpha_const * hvp_tmp
+
+        hvp_parts.append(running_hvp)
+
+        del Gt, Gv, running_hvp
+
+    H_val = torch.cat(hvp_parts, dim=1)
+    scores = H_val @ G_train.T
+
+    del H_val, hvp_parts
+
+    df = pd.DataFrame(
+        scores.detach().cpu().numpy(),
+        index=val_ids,
+        columns=train_ids,
+        dtype=float,
+    )
+
+    del G_train, scores
+
+    if device.startswith("cuda"):
+        torch.cuda.empty_cache()
+
+    print("End of influence estimation.")
+    return df
+
+
+def theta_RelatIF(
+    tr_grad_dict,
+    val_grad_dict,
+    hyperparams=None,
+    device="cuda",
+):
+    if hyperparams is None:
+        hyperparams = {}
+
+    lambda_const_param = float(hyperparams.get("lambda_const_param", 10))
+
+
+    print(f"Calculating influence with theta-RelatIF.")
+    print(
+        f"Params: lambda_const_param={lambda_const_param}, "
+
     )
 
     train_ids = list(tr_grad_dict.keys())
@@ -105,214 +477,149 @@ def gradient_influence_estimation(
         for val_id in val_ids
     ]).to(device)
 
+    hvp_parts = []
+    train_hvp_parts = []
 
-    if inf_method == "GradDot":
-        scores = G_val @ G_train.T
-        
-    elif inf_method == "TracIn":
-        adamw_state = hyperparams.get("adamw_optimizer_state")
-        if adamw_state is None:
-            raise ValueError("TracIn requires 'adamw_optimizer_state'.")
+    for weight_name in tqdm(param_order):
+        Gt = torch.stack([
+            tr_grad_dict[tr_id][weight_name].reshape(-1)
+            for tr_id in train_ids
+        ]).to(device)
 
-        train_update_parts = []
+        Gv = torch.stack([
+            val_grad_dict[val_id][weight_name].reshape(-1)
+            for val_id in val_ids
+        ]).to(device)
 
-        for weight_name in param_order:
-            st = adamw_state[weight_name]
+        lambda_const = Gt.pow(2).mean(dim=1).mean() / lambda_const_param
 
-            v = st["exp_avg_sq"].to(device).reshape(-1)
-            m = st["exp_avg"].to(device).reshape(-1)
+        denom = lambda_const + Gt.pow(2).sum(dim=1)          # [N_train]
+        C_val = (Gv @ Gt.T) / denom.unsqueeze(0)
+        hvp_val = Gv / lambda_const - (C_val @ Gt) / (n_train * lambda_const)
 
-            step = st["step"]
-            step = step.item() if torch.is_tensor(step) else int(step)
+        C_train = (Gt @ Gt.T) / denom.unsqueeze(0)
+        hvp_train = Gt / lambda_const - (C_train @ Gt) / (n_train * lambda_const)
 
-            lr = float(st["lr"])
-            beta1, beta2 = st["betas"]
-            eps = float(st["eps"])
-            wd = float(st["weight_decay"])
+        hvp_parts.append(hvp_val)
+        train_hvp_parts.append(hvp_train)
 
-            if wd != 0.0:
-                raise ValueError(
-                    f"TracInAdam currently assumes weight_decay == 0. "
-                    f"Found weight_decay={wd} for parameter '{weight_name}'."
-                )
-            
+    H_val = torch.cat(hvp_parts, dim=1)
+    H_train = torch.cat(train_hvp_parts, dim=1)
 
-            Gt = torch.stack([
-                tr_grad_dict[tr_id][weight_name].reshape(-1)
-                for tr_id in train_ids
-            ]).to(device)
 
-            updated_m = beta1 * m + (1 - beta1) * Gt
-            updated_v = beta2 * v + (1 - beta2) * Gt ** 2
+    scores = H_val @ G_train.T
 
-            updated_m_hat = updated_m / (1 - beta1 ** (step + 1))
-            updated_v_hat = updated_v / (1 - beta2 ** (step + 1))
+    train_norms = H_train.norm(dim=1)   # ||H^{-1} g_i||, norm of val grad is ommited since we care only about ranking
 
-            adam_preconditioned_train = lr * updated_m_hat / (torch.sqrt(updated_v_hat) + eps)
+    scores = scores / (train_norms.unsqueeze(0) + 1e-12)
 
-            train_update_parts.append(adam_preconditioned_train)
+    del H_val, hvp_parts
 
-        G_train_adam = torch.cat(train_update_parts, dim=1)
+    df = pd.DataFrame(
+        scores.detach().cpu().numpy(),
+        index=val_ids,
+        columns=train_ids,
+        dtype=float,
+    )
 
-        scores = G_val @ G_train_adam.T
+    del G_train, G_val, scores
 
+    if device.startswith("cuda"):
+        torch.cuda.empty_cache()
+
+    print("End of influence estimation.")
+    return df
+
+
+def l_RelatIF(
+    tr_grad_dict,
+    val_grad_dict,
+    hyperparams=None,
+    device="cuda",
+):
     
-    elif inf_method == "GradCos":
-        val_norms = torch.linalg.norm(G_val, dim=1, keepdim=True)
-        tr_norms = torch.linalg.norm(G_train, dim=1, keepdim=True).T
-        scores = G_val @ G_train.T / (val_norms * tr_norms + 1e-12)
+    if hyperparams is None:
+        hyperparams = {}
 
-    elif inf_method == "DataInf":
-
-        hvp_parts = []
-
-        for weight_name in tqdm(param_order):
-            Gt = torch.stack([
-                tr_grad_dict[tr_id][weight_name].reshape(-1)
-                for tr_id in train_ids
-            ]).to(device)
-
-            Gv = torch.stack([
-                val_grad_dict[val_id][weight_name].reshape(-1)
-                for val_id in val_ids
-            ]).to(device)
-
-            lambda_const = Gt.pow(2).mean(dim=1).mean() / lambda_const_param
-
-            denom = lambda_const + Gt.pow(2).sum(dim=1)          # [N_train]
-            C = (Gv @ Gt.T) / denom.unsqueeze(0)                 # [N_val, N_train]
-
-            hvp = Gv / lambda_const - (C @ Gt) / (n_train * lambda_const)
-
-            hvp_parts.append(hvp)
-
-            del Gt, Gv, C, hvp
-
-        H_val = torch.cat(hvp_parts, dim=1)
-        scores = H_val @ G_train.T
-
-        del H_val, hvp_parts
-
-    elif inf_method == "theta-RelatIF":
-
-        hvp_parts = []
-        train_hvp_parts = []
-
-        for weight_name in tqdm(param_order):
-            Gt = torch.stack([
-                tr_grad_dict[tr_id][weight_name].reshape(-1)
-                for tr_id in train_ids
-            ]).to(device)
-
-            Gv = torch.stack([
-                val_grad_dict[val_id][weight_name].reshape(-1)
-                for val_id in val_ids
-            ]).to(device)
-
-            lambda_const = Gt.pow(2).mean(dim=1).mean() / lambda_const_param
-
-            denom = lambda_const + Gt.pow(2).sum(dim=1)          # [N_train]
-            C_val = (Gv @ Gt.T) / denom.unsqueeze(0)
-            hvp_val = Gv / lambda_const - (C_val @ Gt) / (n_train * lambda_const)
-
-            C_train = (Gt @ Gt.T) / denom.unsqueeze(0)
-            hvp_train = Gt / lambda_const - (C_train @ Gt) / (n_train * lambda_const)
-
-            hvp_parts.append(hvp_val)
-            train_hvp_parts.append(hvp_train)
-
-        H_val = torch.cat(hvp_parts, dim=1)
-        H_train = torch.cat(train_hvp_parts, dim=1)
+    lambda_const_param = float(hyperparams.get("lambda_const_param", 10))
 
 
-        scores = H_val @ G_train.T
+    print(f"Calculating influence with l-RelatIF.")
+    print(
+        f"Params: lambda_const_param={lambda_const_param}, "
 
-        train_norms = H_train.norm(dim=1)   # ||H^{-1} g_i||, norm of val grad is ommited since we care only about ranking
+    )
 
-        scores = scores / (train_norms.unsqueeze(0) + 1e-12)
+    train_ids = list(tr_grad_dict.keys())
+    val_ids = list(val_grad_dict.keys())
+    n_train = len(train_ids)
 
-        del H_val, hvp_parts
+    first_tr = next(iter(tr_grad_dict.values()))
+    first_val = next(iter(val_grad_dict.values()))
 
-    elif inf_method == "l-RelatIF":
+    param_order = [
+        name for name in first_tr.keys()
+        if name in first_val
+    ]
 
-        hvp_parts = []
-        train_hvp_parts = []
+    G_train = torch.stack([
+        torch.cat([
+            tr_grad_dict[tr_id][name].reshape(-1)
+            for name in param_order
+        ])
+        for tr_id in train_ids
+    ]).to(device)
 
-        for weight_name in tqdm(param_order):
-            Gt = torch.stack([
-                tr_grad_dict[tr_id][weight_name].reshape(-1)
-                for tr_id in train_ids
-            ]).to(device)
+    G_val = torch.stack([
+        torch.cat([
+            val_grad_dict[val_id][name].reshape(-1)
+            for name in param_order
+        ])
+        for val_id in val_ids
+    ]).to(device)
 
-            Gv = torch.stack([
-                val_grad_dict[val_id][weight_name].reshape(-1)
-                for val_id in val_ids
-            ]).to(device)
+    hvp_parts = []
+    train_hvp_parts = []
 
-            lambda_const = Gt.pow(2).mean(dim=1).mean() / lambda_const_param
+    for weight_name in tqdm(param_order):
+        Gt = torch.stack([
+            tr_grad_dict[tr_id][weight_name].reshape(-1)
+            for tr_id in train_ids
+        ]).to(device)
 
-            denom = lambda_const + Gt.pow(2).sum(dim=1)          # [N_train]
-            C_val = (Gv @ Gt.T) / denom.unsqueeze(0)
-            hvp_val = Gv / lambda_const - (C_val @ Gt) / (n_train * lambda_const)
+        Gv = torch.stack([
+            val_grad_dict[val_id][weight_name].reshape(-1)
+            for val_id in val_ids
+        ]).to(device)
 
-            C_train = (Gt @ Gt.T) / denom.unsqueeze(0)
-            hvp_train = Gt / lambda_const - (C_train @ Gt) / (n_train * lambda_const)
+        lambda_const = Gt.pow(2).mean(dim=1).mean() / lambda_const_param
 
-            hvp_parts.append(hvp_val)
-            train_hvp_parts.append(hvp_train)
+        denom = lambda_const + Gt.pow(2).sum(dim=1)          # [N_train]
+        C_val = (Gv @ Gt.T) / denom.unsqueeze(0)
+        hvp_val = Gv / lambda_const - (C_val @ Gt) / (n_train * lambda_const)
 
-        H_val = torch.cat(hvp_parts, dim=1)
-        H_train = torch.cat(train_hvp_parts, dim=1)
+        C_train = (Gt @ Gt.T) / denom.unsqueeze(0)
+        hvp_train = Gt / lambda_const - (C_train @ Gt) / (n_train * lambda_const)
+
+        hvp_parts.append(hvp_val)
+        train_hvp_parts.append(hvp_train)
+
+    H_val = torch.cat(hvp_parts, dim=1)
+    H_train = torch.cat(train_hvp_parts, dim=1)
 
 
-        scores = H_val @ G_train.T
+    scores = H_val @ G_train.T
 
-        self_influence = torch.abs(torch.diag(H_train @ G_train.T))
+    self_influence = torch.abs(torch.diag(H_train @ G_train.T))
 
-        scores = scores / (
-            torch.sqrt(self_influence).unsqueeze(0) + 1e-12
-        )
+    scores = scores / (
+        torch.sqrt(self_influence).unsqueeze(0) + 1e-12
+    )
 
-        print(f"scores shape: {scores.shape}")
-        print(f"self_influence shape: {self_influence.shape}")
+    print(f"scores shape: {scores.shape}")
+    print(f"self_influence shape: {self_influence.shape}")
 
-        del H_val, hvp_parts
-
-    elif inf_method == "LiSSA":
-        hvp_parts = []
-
-        for weight_name in tqdm(param_order):
-            Gt = torch.stack([
-                tr_grad_dict[tr_id][weight_name].reshape(-1)
-                for tr_id in train_ids
-            ]).to(device)
-
-            Gv = torch.stack([
-                val_grad_dict[val_id][weight_name].reshape(-1)
-                for val_id in val_ids
-            ]).to(device)
-
-            lambda_const = Gt.pow(2).mean(dim=1).mean() / lambda_const_param
-
-            running_hvp = Gv.clone()
-
-            for _ in range(n_iteration):
-                dots = running_hvp @ Gt.T                         # [N_val, N_train]
-                hvp_tmp = (dots @ Gt + lambda_const * running_hvp) / n_train / 1e3
-                running_hvp = Gv + running_hvp - alpha_const * hvp_tmp
-
-            hvp_parts.append(running_hvp)
-
-            del Gt, Gv, running_hvp
-
-        H_val = torch.cat(hvp_parts, dim=1)
-        scores = H_val @ G_train.T
-
-        del H_val, hvp_parts
-
-        
-    else:
-        raise Exception("Invalid hvp calculation option.")
+    del H_val, hvp_parts
 
     df = pd.DataFrame(
         scores.detach().cpu().numpy(),
