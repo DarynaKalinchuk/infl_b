@@ -4,7 +4,7 @@
 #SBATCH --container-mount-home
 #SBATCH --mem=128G
 #SBATCH --cpus-per-task=24
-#SBATCH --time=1-00:00:00
+#SBATCH --time=12:00:00
 #SBATCH --container-workdir=/srv/home/users/kalinchukd23cs/infl_b
 #SBATCH --nodelist=dgx-h100-em2
 #SBATCH --gres=gpu:h100:1

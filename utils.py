@@ -5,7 +5,7 @@ import pandas as pd
 from tqdm import tqdm
 from peft import PeftModel
 from collections import defaultdict
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, DataCollatorWithPadding
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 import os
 import json
 import math
@@ -24,37 +24,118 @@ from kronfluence.utils.common.score_arguments import all_low_precision_score_arg
 from kronfluence.utils.dataset import DataLoaderKwargs
 
 
-def collect_gradient(model, dataloader, device="cuda", bring_to_cpu=True):
 
-    model.to(device)
+def get_preprocessed_dataset(tokenizer, dataset, chat_template, max_length):
+    def apply_prompt_template(sample):
+        return {
+            'text': chat_template.format(prompt=sample['prompts'], response=sample['response'])
+        }
+    dataset = dataset.map(apply_prompt_template, remove_columns=list(dataset.features))
+
+    def tokenized_dataset(text):
+        input_text = text['text']
+        tokenized_output = tokenizer(input_text, truncation=True, padding='max_length', max_length=max_length)
+        tokenized_output['labels'] = tokenized_output['input_ids'].copy()
+        return tokenized_output
+
+    return dataset.map(tokenized_dataset, batched=True, remove_columns=['text'])
+
+
+
+def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
+
+    
+    collate_fn = lambda x: tokenizer.pad(x, padding="longest", return_tensors="pt")
+    train_dataloader_stochastic = DataLoader(tokenized_tr, 
+                                              shuffle=False,
+                                              collate_fn=collate_fn,
+                                              batch_size=1)
+    val_dataloader_stochastic = DataLoader(tokenized_val, 
+                                              shuffle=False,
+                                              collate_fn=collate_fn,
+                                              batch_size=1)
+
     model.eval()
-
-    grad_dict_all = {}
-
-    for step, batch in enumerate(tqdm(dataloader)):
-        model.zero_grad(set_to_none=True)
-
-        batch["labels"] = batch["input_ids"].clone()
-        batch = {k: v.to(device) for k, v in batch.items()}
-
+    tr_grad_dict = {}
+    for step, batch in enumerate(tqdm(train_dataloader_stochastic)):
+        model.zero_grad()
+        batch['labels'] = batch['input_ids']
+        batch.to('cuda')
         outputs = model(**batch)
         loss = outputs.loss
         loss.backward()
-
+            
         grad_dict = {}
-
         for k, v in model.named_parameters():
-            if "lora_A" in k:
-                grad = v.grad.detach()
-                grad_dict[k] = grad.cpu() if bring_to_cpu else grad.clone()
+            if 'lora_A' in k:
+                grad_dict[k] = v.grad.cpu()
+            elif 'lora_B' in k:
+                grad_dict[k] = v.grad.cpu().T
+            else: pass
+        tr_grad_dict[step] = grad_dict
+        del grad_dict
+            
+    val_grad_dict = {}
+    for step, batch in enumerate(tqdm(val_dataloader_stochastic)):
+        model.zero_grad()
+        batch['labels'] = batch['input_ids']
+        batch.to('cuda')
+        outputs = model(**batch)
+        loss = outputs.loss
+        loss.backward()
+            
+        grad_dict = {}
+        for k, v in model.named_parameters():
+            if 'lora_A' in k:
+                grad_dict[k] = v.grad.cpu()
+            elif 'lora_B' in k:
+                grad_dict[k] = v.grad.cpu().T
+            else: pass
+        val_grad_dict[step] = grad_dict    
+        del grad_dict
+            
+    return tr_grad_dict, val_grad_dict
 
-            elif "lora_B" in k:
-                grad = v.grad.detach().T
-                grad_dict[k] = grad.cpu() if bring_to_cpu else grad.clone()
 
-        grad_dict_all[step] = grad_dict
+def template_setting(model_n):
+    if model_n == 'Llama':
+        model_name = "meta-llama/Llama-3.2-1B-Instruct"
+        chat_template = (
+            "<|begin_of_text|>"
+            "<|start_header_id|>user<|end_header_id|>\n"
+            "{prompt}<|eot_id|>\n"
+            "<|start_header_id|>assistant<|end_header_id|>\n"
+            "{response}"
+        )
+    elif model_n == 'Qwen0.5':
+        model_name = "Qwen/Qwen2.5-0.5B-Instruct"
+        chat_template = (
+            "<|im_start|>user\n"
+            "{prompt}<|im_end|>\n"
+            "<|im_start|>assistant\n"
+            "{response}<|im_end|>"
+        )
+    
+    elif model_n == 'Qwen1.5':
+        model_name = "Qwen/Qwen2-1.5B-Instruct"
+        chat_template = (
+            "<|im_start|>user\n"
+            "{prompt}<|im_end|>\n"
+            "<|im_start|>assistant\n"
+            "{response}<|im_end|>"
+        )
 
-    return grad_dict_all
+    elif model_n == "Olmo":
+        model_name = "allenai/OLMo-2-0425-1B-SFT"
+        chat_template = (
+            "<|user|>\n"
+            "{prompt}\n"
+            "<|assistant|>\n"
+            "{response}<|endoftext|>"
+        )
+
+    return model_name, chat_template
+
 
 
 
@@ -193,23 +274,3 @@ class KronfluenceTask(Task):
         return None  # Attention mask not used.
     
 
-
-def format_for_sft(example, eos_token):
-    prompt = example["prompts"].strip()
-    response = example["response"].strip()
-
-    example["text"] = f"{prompt} -> {response}{eos_token}"
-    return example
-
-
-def causal_tokenize(tokenizer, dataset, max_length=128):
-    #tokenizing prompts only?
-    tokenize_func = lambda x: tokenizer(
-        x["prompts"], truncation=True, padding=True, max_length=max_length, return_tensors="pt"
-    )
-
-    return dataset.map(
-        tokenize_func,
-        batched=True,
-        remove_columns=["response", "variation", "prompts"],
-    )

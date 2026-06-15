@@ -7,7 +7,6 @@ from datasets import load_from_disk
 from transformers import AutoTokenizer
 import time
 
-from peft import AutoPeftModelForCausalLM
 from utils import *
 from postprocess_utils import *
 from inf_est_methods import *
@@ -68,14 +67,13 @@ if __name__ == '__main__':
         model_name = MODELS[args.model]
     else:
         raise ValueError("Invalid model name")
+    
+    model_name, chat_template = template_setting(args.model)
 
     core_path = f"{args.model}/{args.dataset}_{args.epochs}"
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        "lora_adapter/" + core_path,
-        padding_side="right",
-        trust_remote_code=True,
-    )
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer.padding_side = 'left'
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -92,6 +90,9 @@ if __name__ == '__main__':
 
     quantization_config = None
 
+    base_model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config, 
+                                                      device_map='auto')
+
     start_time = time.time()
 
     if (args.inf_method == "random"):
@@ -106,40 +107,22 @@ if __name__ == '__main__':
     else:
 
 
-        model =  AutoPeftModelForCausalLM.from_pretrained(
-                    "lora_adapter/" + core_path,
-                    dtype = torch.bfloat16,
-                    offload_state_dict = True,
-                    is_trainable = True
-                )
+        model = PeftModel.from_pretrained(
+                base_model,
+                "lora_adapter/" + core_path
+            )
 
         model.config.use_cache = False
         model.to("cuda")
 
-        tokenized_tr = causal_tokenize(tokenizer, dataset['train'], max_length = 128)
-        tokenized_val = causal_tokenize(tokenizer, dataset['test'], max_length = 128)
-
-        collate_fn = lambda x: tokenizer.pad(
-            x,
-            padding="longest",
-            return_tensors="pt"
+        tokenized_tr = get_preprocessed_dataset(
+            tokenizer, dataset["train"], chat_template, max_length=args.max_length
+        )
+        tokenized_val = get_preprocessed_dataset(
+            tokenizer, dataset["test"], chat_template, max_length=args.max_length
         )
 
-        train_dataloader = DataLoader(
-            tokenized_tr,
-            shuffle=False,
-            collate_fn=collate_fn,
-            batch_size=1
-        )
-
-        val_dataloader = DataLoader(
-            tokenized_val,
-            shuffle=False,
-            collate_fn=collate_fn,
-            batch_size=1
-        )
-
-        
+                
         if args.inf_method == "EKFAC":
                 
                 
@@ -158,13 +141,59 @@ if __name__ == '__main__':
 
         elif "RepSim" == args.inf_method:
 
-            
-            influence_inf = RepSim(
-                model=model,
-                tokenizer=tokenizer,
-                train_prompts=dataset["train"]["prompts"],
-                test_prompts=dataset["test"]["prompts"],
-            )
+            model.eval()
+
+            chat_template = chat_template.replace("{response}", "")
+
+            print("Generate hidden states...")
+
+            check = []
+            for p in tqdm(dataset["test"]["prompts"]):
+                inputs = tokenizer(
+                    chat_template.format(prompt=p),
+                    padding=True,
+                    return_tensors="pt"
+                ).to("cuda")
+
+                with torch.no_grad():
+                    outputs = model(**inputs, output_hidden_states=True)
+
+                check.append(
+                    outputs.hidden_states[-1][:, -1, :]
+                    .view(-1)
+                    .float()
+                    .cpu()
+                    .numpy()
+                )
+
+            query = []
+            for p in tqdm(dataset["train"]["prompts"]):
+                inputs = tokenizer(
+                    chat_template.format(prompt=p),
+                    padding=True,
+                    return_tensors="pt"
+                ).to("cuda")
+
+                with torch.no_grad():
+                    outputs = model(**inputs, output_hidden_states=True)
+
+                query.append(
+                    outputs.hidden_states[-1][:, -1, :]
+                    .view(-1)
+                    .float()
+                    .cpu()
+                    .numpy()
+                )
+
+            check = np.asarray(check)
+            query = np.asarray(query)
+
+            check = check / np.linalg.norm(check, axis=1, keepdims=True)
+            query = query / np.linalg.norm(query, axis=1, keepdims=True)
+
+            sim_matrix = check @ query.T
+
+            influence_inf = pd.DataFrame(sim_matrix)
 
 
         elif "TracIn" in args.inf_method:
@@ -190,22 +219,16 @@ if __name__ == '__main__':
                 print(f"Collecting gradients for {ckpt_path}")
 
                 
-                model =  AutoPeftModelForCausalLM.from_pretrained(
-                        ckpt_path,
-                        dtype = torch.bfloat16,
-                        offload_state_dict = True,
-                        is_trainable = True
-                    )
+                model = PeftModel.from_pretrained(base_model, ckpt_path, is_trainable=True)
 
                 model.config.use_cache = False
                 model.to("cuda")
 
-                tr_grad_dict = collect_gradient( 
-                    model, train_dataloader
-                )
-
-                val_grad_dict = collect_gradient( 
-                    model, val_dataloader
+                tr_grad_dict, val_grad_dict = collect_gradient( 
+                    model,
+                    tokenizer,
+                    tokenized_tr,
+                    tokenized_val
                 )
 
                 
@@ -230,13 +253,7 @@ if __name__ == '__main__':
         else:
 
 
-            tr_grad_dict = collect_gradient( 
-                model, train_dataloader
-            )
-
-            val_grad_dict = collect_gradient( 
-                model, val_dataloader
-            )
+            tr_grad_dict, val_grad_dict = collect_gradient(model, tokenizer, tokenized_tr, tokenized_val)
 
             inf_args_map = dict(
             item.split('=') for item in (args.inf_args.split(',') if args.inf_args else [])
