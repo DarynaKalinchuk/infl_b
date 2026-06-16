@@ -68,7 +68,7 @@ if __name__ == '__main__':
     else:
         raise ValueError("Invalid model name")
     
-    model_name, chat_template = template_setting(args.model)
+    chat_template = template_setting(model_name)
 
     core_path = f"{args.model}/{args.dataset}_{args.epochs}"
 
@@ -88,14 +88,9 @@ if __name__ == '__main__':
     metrics_filename = f"{args.dataset}_{args.model}_{args.inf_method}_metrics_results.json".replace(" ", "_")
     metrics_path = os.path.join(results_dir, metrics_filename)
 
-    quantization_config = None
-
-    base_model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config, 
-                                                      device_map='auto')
-
     start_time = time.time()
 
-    if (args.inf_method == "random"):
+    if args.inf_method == "random":
         random_influence_estimation(dataset = dataset, metrics_path = metrics_path)
 
         sys.exit()
@@ -104,16 +99,33 @@ if __name__ == '__main__':
 
         influence_inf = BM25_scores(dataset = dataset)
 
-    else:
+    elif args.inf_method == "RepSim":
 
+        base_model = AutoModelForCausalLM.from_pretrained(model_name, 
+                                                      device_map='cuda')
 
         model = PeftModel.from_pretrained(
                 base_model,
                 "lora_adapter/" + core_path
             )
-
+        
         model.config.use_cache = False
         model.to("cuda")
+        model.eval()
+
+        influence_inf = RepSim(
+        model=model,
+        tokenizer=tokenizer,
+        chat_template=chat_template,
+        train_prompts=dataset["train"]["prompts"],
+        test_prompts=dataset["test"]["prompts"],
+    )
+
+    else:
+
+        base_model = AutoModelForCausalLM.from_pretrained(model_name, 
+                                                      device_map='cuda')
+
 
         tokenized_tr = get_preprocessed_dataset(
             tokenizer, dataset["train"], chat_template, max_length=args.max_length
@@ -124,6 +136,15 @@ if __name__ == '__main__':
 
                 
         if args.inf_method == "EKFAC":
+                
+                model = PeftModel.from_pretrained(
+                    base_model,
+                    "lora_adapter/" + core_path,
+                    is_trainable=True
+                )
+
+                model.config.use_cache = False
+                model.to("cuda")
                 
                 
                 scores = ekfac_influence_estimation(tokenizer,
@@ -138,64 +159,6 @@ if __name__ == '__main__':
 
             
 
-
-        elif "RepSim" == args.inf_method:
-
-            model.eval()
-
-            chat_template = chat_template.replace("{response}", "")
-
-            print("Generate hidden states...")
-
-            check = []
-            for p in tqdm(dataset["test"]["prompts"]):
-                inputs = tokenizer(
-                    chat_template.format(prompt=p),
-                    padding=True,
-                    return_tensors="pt"
-                ).to("cuda")
-
-                with torch.no_grad():
-                    outputs = model(**inputs, output_hidden_states=True)
-
-                check.append(
-                    outputs.hidden_states[-1][:, -1, :]
-                    .view(-1)
-                    .float()
-                    .cpu()
-                    .numpy()
-                )
-
-            query = []
-            for p in tqdm(dataset["train"]["prompts"]):
-                inputs = tokenizer(
-                    chat_template.format(prompt=p),
-                    padding=True,
-                    return_tensors="pt"
-                ).to("cuda")
-
-                with torch.no_grad():
-                    outputs = model(**inputs, output_hidden_states=True)
-
-                query.append(
-                    outputs.hidden_states[-1][:, -1, :]
-                    .view(-1)
-                    .float()
-                    .cpu()
-                    .numpy()
-                )
-
-            check = np.asarray(check)
-            query = np.asarray(query)
-
-            check = check / np.linalg.norm(check, axis=1, keepdims=True)
-            query = query / np.linalg.norm(query, axis=1, keepdims=True)
-
-            sim_matrix = check @ query.T
-
-            influence_inf = pd.DataFrame(sim_matrix)
-
-
         elif "TracIn" in args.inf_method:
 
             if "random" in args.model:
@@ -209,7 +172,7 @@ if __name__ == '__main__':
             checkpoint_paths = sorted(
                 glob.glob(os.path.join(ckpt_root, "checkpoint-*")),
                 key=lambda x: int(x.split("-")[-1])
-            ) #[:1] #for testing just the 1 check point
+            ) #[:1] #for testing just 1 check point
 
 
             
@@ -251,6 +214,15 @@ if __name__ == '__main__':
 
 
         else:
+
+            model = PeftModel.from_pretrained(
+                    base_model,
+                    "lora_adapter/" + core_path,
+                    is_trainable=True
+                )
+
+            model.config.use_cache = False
+            model.to("cuda")
 
 
             tr_grad_dict, val_grad_dict = collect_gradient(model, tokenizer, tokenized_tr, tokenized_val)

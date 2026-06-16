@@ -5,7 +5,7 @@ import pandas as pd
 from tqdm import tqdm
 from peft import PeftModel
 from collections import defaultdict
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, DataCollatorWithPadding
 import os
 import json
 import math
@@ -18,6 +18,7 @@ from torch import nn
 
 from kronfluence.analyzer import Analyzer, prepare_model
 from kronfluence.task import Task
+
 
 from kronfluence.utils.common.factor_arguments import all_low_precision_factor_arguments
 from kronfluence.utils.common.score_arguments import all_low_precision_score_arguments
@@ -98,8 +99,7 @@ def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
 
 
 def template_setting(model_n):
-    if model_n == 'Llama':
-        model_name = "meta-llama/Llama-3.2-1B-Instruct"
+    if model_n == "meta-llama/Llama-3.2-3B-Instruct":
         chat_template = (
             "<|begin_of_text|>"
             "<|start_header_id|>user<|end_header_id|>\n"
@@ -107,8 +107,8 @@ def template_setting(model_n):
             "<|start_header_id|>assistant<|end_header_id|>\n"
             "{response}"
         )
-    elif model_n == 'Qwen0.5':
-        model_name = "Qwen/Qwen2.5-0.5B-Instruct"
+
+    elif model_n == "Qwen/Qwen2.5-3B-Instruct":
         chat_template = (
             "<|im_start|>user\n"
             "{prompt}<|im_end|>\n"
@@ -116,17 +116,8 @@ def template_setting(model_n):
             "{response}<|im_end|>"
         )
     
-    elif model_n == 'Qwen1.5':
-        model_name = "Qwen/Qwen2-1.5B-Instruct"
-        chat_template = (
-            "<|im_start|>user\n"
-            "{prompt}<|im_end|>\n"
-            "<|im_start|>assistant\n"
-            "{response}<|im_end|>"
-        )
 
-    elif model_n == "Olmo":
-        model_name = "allenai/OLMo-2-0425-1B-SFT"
+    elif model_n == "allenai/OLMo-2-0425-1B-SFT":
         chat_template = (
             "<|user|>\n"
             "{prompt}\n"
@@ -134,7 +125,10 @@ def template_setting(model_n):
             "{response}<|endoftext|>"
         )
 
-    return model_name, chat_template
+    else:
+        raise ValueError(f"Chat template not defined in utils for model: {model_n}")
+
+    return chat_template
 
 
 

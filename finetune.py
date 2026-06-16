@@ -67,7 +67,7 @@ if __name__ == '__main__':
     else:
         raise ValueError("Invalid model name")
     
-    model_name, chat_template = template_setting(args.model)
+    chat_template = template_setting(model_name)
 
     
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -100,16 +100,6 @@ if __name__ == '__main__':
     for var in ["RANK", "LOCAL_RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT"]:
         os.environ.pop(var, None)
 
-    training_args = TrainingArguments(
-        output_dir=save_path,
-        per_device_train_batch_size=args.batch_size,
-        num_train_epochs=args.epochs,
-        logging_steps=args.logging_step,
-        save_steps=10,
-        save_total_limit=10, # number of checkpoints
-        remove_unused_columns=False,
-        learning_rate = 5e-5
-    )
 
     lora_config = LoraConfig(
         r=args.lora_r,
@@ -127,6 +117,18 @@ if __name__ == '__main__':
         model.save_pretrained(save_path)
         print(f"Model saved to: {save_path}")
         sys.exit()
+
+
+    training_args = TrainingArguments(
+        output_dir=save_path,
+        per_device_train_batch_size=args.batch_size,
+        num_train_epochs=args.epochs,
+        logging_steps=args.logging_step,
+        save_steps=10,
+        save_total_limit=10, # number of checkpoints
+        remove_unused_columns=False,
+        learning_rate = 5e-5
+    )
 
     trainer = Trainer(
         model=model,

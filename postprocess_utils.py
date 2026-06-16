@@ -96,7 +96,13 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
         parts = stem.split("_")
 
         group = "_".join(parts[:2]) if len(parts) >= 2 else stem
-        exp = parts[2] if len(parts) >= 3 else stem
+        
+        if len(parts) >= 5:
+            exp = "_".join(parts[2:-2])
+        elif len(parts) >= 3:
+            exp = "_".join(parts[2:])
+        else:
+            exp = stem
 
         with open(os.path.join(results_dir, file)) as f:
             grouped[group].append((exp, json.load(f)))
