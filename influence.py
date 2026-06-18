@@ -52,23 +52,8 @@ if __name__ == '__main__':
             if line.strip()
         ]
 
-
-    MODELS = {}
-    with open("settings_txt/models.txt") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            key, value = line.split("=", 1)
-            MODELS[key] = value
-
     
-    if args.model in MODELS.keys():
-        model_name = MODELS[args.model]
-    else:
-        raise ValueError("Invalid model name")
-    
-    chat_template = template_setting(model_name)
+    chat_template, model_name = template_setting(args.model)
 
     core_path = f"{args.model}/{args.dataset}_{args.epochs}"
 

@@ -67,7 +67,6 @@ def GradDot(
     
     train_ids = list(tr_grad_dict.keys())
     val_ids = list(val_grad_dict.keys())
-    n_train = len(train_ids)
 
     first_tr = next(iter(tr_grad_dict.values()))
     first_val = next(iter(val_grad_dict.values()))
@@ -122,7 +121,6 @@ def GradCos(
 
     train_ids = list(tr_grad_dict.keys())
     val_ids = list(val_grad_dict.keys())
-    n_train = len(train_ids)
 
     first_tr = next(iter(tr_grad_dict.values()))
     first_val = next(iter(val_grad_dict.values()))
@@ -179,7 +177,6 @@ def TracIn(
 
     train_ids = list(tr_grad_dict.keys())
     val_ids = list(val_grad_dict.keys())
-    n_train = len(train_ids)
 
     first_tr = next(iter(tr_grad_dict.values()))
     first_val = next(iter(val_grad_dict.values()))

@@ -36,7 +36,12 @@ def get_preprocessed_dataset(tokenizer, dataset, chat_template, max_length):
     def tokenized_dataset(text):
         input_text = text['text']
         tokenized_output = tokenizer(input_text, truncation=True, padding='max_length', max_length=max_length)
-        tokenized_output['labels'] = tokenized_output['input_ids'].copy()
+        labels = tokenized_output["input_ids"].copy()
+        labels = [
+            [-100 if token == tokenizer.pad_token_id else token for token in row]
+            for row in labels
+        ]
+        tokenized_output["labels"] = labels
         return tokenized_output
 
     return dataset.map(tokenized_dataset, batched=True, remove_columns=['text'])
@@ -60,8 +65,7 @@ def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
     tr_grad_dict = {}
     for step, batch in enumerate(tqdm(train_dataloader_stochastic)):
         model.zero_grad()
-        batch['labels'] = batch['input_ids']
-        batch.to('cuda')
+        batch = {k: v.to("cuda") for k, v in batch.items()}
         outputs = model(**batch)
         loss = outputs.loss
         loss.backward()
@@ -79,8 +83,7 @@ def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
     val_grad_dict = {}
     for step, batch in enumerate(tqdm(val_dataloader_stochastic)):
         model.zero_grad()
-        batch['labels'] = batch['input_ids']
-        batch.to('cuda')
+        batch = {k: v.to("cuda") for k, v in batch.items()}
         outputs = model(**batch)
         loss = outputs.loss
         loss.backward()
@@ -99,7 +102,9 @@ def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
 
 
 def template_setting(model_n):
-    if model_n == "meta-llama/Llama-3.2-3B-Instruct":
+    if model_n == "Llama3":
+
+        model_name = "meta-llama/Llama-3.2-3B-Instruct"
         chat_template = (
             "<|begin_of_text|>"
             "<|start_header_id|>user<|end_header_id|>\n"
@@ -108,10 +113,9 @@ def template_setting(model_n):
             "{response}"
         )
 
-    elif model_n in [
-        "Qwen/Qwen2.5-3B-Instruct",
-        "Qwen/Qwen3-4B-Instruct",
-    ]:
+    elif model_n == "QWEN3":
+
+        model_name = "Qwen/Qwen2.5-3B-Instruct"
         chat_template = (
             "<|im_start|>user\n"
             "{prompt}<|im_end|>\n"
@@ -119,8 +123,20 @@ def template_setting(model_n):
             "{response}<|im_end|>"
         )
     
+    elif model_n == "QWEN4":
 
-    elif model_n == "allenai/OLMo-2-0425-1B-SFT":
+        model_name = "Qwen/Qwen3-4B-Instruct"
+        chat_template = (
+            "<|im_start|>user\n"
+            "{prompt}<|im_end|>\n"
+            "<|im_start|>assistant\n"
+            "{response}<|im_end|>"
+        )
+
+
+    elif model_n == "Olmo":
+
+        model_name = "allenai/OLMo-2-0425-1B-SFT"
         chat_template = (
             "<|user|>\n"
             "{prompt}\n"
@@ -128,10 +144,23 @@ def template_setting(model_n):
             "{response}<|endoftext|>"
         )
 
+
+    elif model_n == "randomLlama":
+
+        model_name = "meta-llama/Llama-3.2-3B-Instruct"
+        chat_template = (
+            "<|begin_of_text|>"
+            "<|start_header_id|>user<|end_header_id|>\n"
+            "{prompt}<|eot_id|>\n"
+            "<|start_header_id|>assistant<|end_header_id|>\n"
+            "{response}"
+        )
+
+
     else:
         raise ValueError(f"Chat template not defined in utils for model: {model_n}")
 
-    return chat_template
+    return chat_template, model_name
 
 
 
