@@ -38,7 +38,8 @@ while read -r DATASET_NAME; do
 
     done < settings_txt/methods_to_run.txt
 
-    python3 -c "from postprocess_utils import generate_kde_plots; generate_kde_plots(name_begin='${DATASET_NAME}_${EPOCHS}', cache_dir='cache/${MODEL_NAME}')"
+    python3 -c "from postprocess_utils import generate_kde_plots; generate_kde_plots(name_begin='${DATASET_NAME}_${EPOCHS}_${MODEL_NAME}', cache_dir='cache/${MODEL_NAME}')"
+
 done < settings_txt/dataset_settings.txt
 
 
