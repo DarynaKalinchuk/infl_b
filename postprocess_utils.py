@@ -225,12 +225,12 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
 
 
 def generate_kde_plots(
-    cache_dir="cache/Olmo",
+    model_n="Olmo",
     results_dir="results",
     name_begin = "Backdoor_1",
     include_methods=None,  # e.g. ["LiSSA", "BM25", "l-RelatIF"]
 ):
-    cache_dir = Path(cache_dir)
+    cache_dir = Path("cache/" + model_n)
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -268,7 +268,7 @@ def generate_kde_plots(
     plt.legend()
     plt.tight_layout()
 
-    output_path = results_dir / (name_begin + "_KDEs.png")
+    output_path = results_dir / (name_begin + "_" + model_n + "_KDEs.png")
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close()
 

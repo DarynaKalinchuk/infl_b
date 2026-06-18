@@ -442,12 +442,8 @@ def theta_RelatIF(
 
     lambda_const_param = float(hyperparams.get("lambda_const_param", 10))
 
-
-    print(f"Calculating influence with theta-RelatIF.")
-    print(
-        f"Params: lambda_const_param={lambda_const_param}, "
-
-    )
+    print("Calculating influence with theta-RelatIF.")
+    print(f"Params: lambda_const_param={lambda_const_param}")
 
     train_ids = list(tr_grad_dict.keys())
     val_ids = list(val_grad_dict.keys())
@@ -461,24 +457,16 @@ def theta_RelatIF(
         if name in first_val
     ]
 
-    G_train = torch.stack([
-        torch.cat([
-            tr_grad_dict[tr_id][name].reshape(-1)
-            for name in param_order
-        ])
-        for tr_id in train_ids
-    ]).to(device)
+    scores = torch.zeros(
+        len(val_ids),
+        len(train_ids),
+        device=device,
+    )
 
-    G_val = torch.stack([
-        torch.cat([
-            val_grad_dict[val_id][name].reshape(-1)
-            for name in param_order
-        ])
-        for val_id in val_ids
-    ]).to(device)
-
-    hvp_parts = []
-    train_hvp_parts = []
+    train_norm_sq = torch.zeros(
+        len(train_ids),
+        device=device,
+    )
 
     for weight_name in tqdm(param_order):
         Gt = torch.stack([
@@ -493,27 +481,26 @@ def theta_RelatIF(
 
         lambda_const = Gt.pow(2).mean(dim=1).mean() / lambda_const_param
 
-        denom = lambda_const + Gt.pow(2).sum(dim=1)          # [N_train]
+        denom = lambda_const + Gt.pow(2).sum(dim=1)
+
         C_val = (Gv @ Gt.T) / denom.unsqueeze(0)
-        hvp_val = Gv / lambda_const - (C_val @ Gt) / (n_train * lambda_const)
+        hvp_val = Gv / lambda_const - (C_val @ Gt) / (
+            n_train * lambda_const
+        )
 
         C_train = (Gt @ Gt.T) / denom.unsqueeze(0)
-        hvp_train = Gt / lambda_const - (C_train @ Gt) / (n_train * lambda_const)
+        hvp_train = Gt / lambda_const - (C_train @ Gt) / (
+            n_train * lambda_const
+        )
 
-        hvp_parts.append(hvp_val)
-        train_hvp_parts.append(hvp_train)
+        scores += hvp_val @ Gt.T
+        train_norm_sq += hvp_train.pow(2).sum(dim=1)
 
-    H_val = torch.cat(hvp_parts, dim=1)
-    H_train = torch.cat(train_hvp_parts, dim=1)
+        del Gt, Gv, C_val, C_train, hvp_val, hvp_train
 
-
-    scores = H_val @ G_train.T
-
-    train_norms = H_train.norm(dim=1)   # ||H^{-1} g_i||, norm of val grad is ommited since we care only about ranking
-
-    scores = scores / (train_norms.unsqueeze(0) + 1e-12)
-
-    del H_val, hvp_parts
+    scores = scores / (
+        torch.sqrt(train_norm_sq).unsqueeze(0) + 1e-12
+    )
 
     df = pd.DataFrame(
         scores.detach().cpu().numpy(),
@@ -522,7 +509,7 @@ def theta_RelatIF(
         dtype=float,
     )
 
-    del G_train, G_val, scores
+    del scores, train_norm_sq
 
     if device.startswith("cuda"):
         torch.cuda.empty_cache()
@@ -537,18 +524,13 @@ def l_RelatIF(
     hyperparams=None,
     device="cuda",
 ):
-    
     if hyperparams is None:
         hyperparams = {}
 
     lambda_const_param = float(hyperparams.get("lambda_const_param", 10))
 
-
-    print(f"Calculating influence with l-RelatIF.")
-    print(
-        f"Params: lambda_const_param={lambda_const_param}, "
-
-    )
+    print("Calculating influence with l-RelatIF.")
+    print(f"Params: lambda_const_param={lambda_const_param}")
 
     train_ids = list(tr_grad_dict.keys())
     val_ids = list(val_grad_dict.keys())
@@ -562,24 +544,16 @@ def l_RelatIF(
         if name in first_val
     ]
 
-    G_train = torch.stack([
-        torch.cat([
-            tr_grad_dict[tr_id][name].reshape(-1)
-            for name in param_order
-        ])
-        for tr_id in train_ids
-    ]).to(device)
+    scores = torch.zeros(
+        len(val_ids),
+        len(train_ids),
+        device=device,
+    )
 
-    G_val = torch.stack([
-        torch.cat([
-            val_grad_dict[val_id][name].reshape(-1)
-            for name in param_order
-        ])
-        for val_id in val_ids
-    ]).to(device)
-
-    hvp_parts = []
-    train_hvp_parts = []
+    self_influence = torch.zeros(
+        len(train_ids),
+        device=device,
+    )
 
     for weight_name in tqdm(param_order):
         Gt = torch.stack([
@@ -594,32 +568,29 @@ def l_RelatIF(
 
         lambda_const = Gt.pow(2).mean(dim=1).mean() / lambda_const_param
 
-        denom = lambda_const + Gt.pow(2).sum(dim=1)          # [N_train]
+        denom = lambda_const + Gt.pow(2).sum(dim=1)
+
         C_val = (Gv @ Gt.T) / denom.unsqueeze(0)
-        hvp_val = Gv / lambda_const - (C_val @ Gt) / (n_train * lambda_const)
+        hvp_val = Gv / lambda_const - (C_val @ Gt) / (
+            n_train * lambda_const
+        )
 
         C_train = (Gt @ Gt.T) / denom.unsqueeze(0)
-        hvp_train = Gt / lambda_const - (C_train @ Gt) / (n_train * lambda_const)
+        hvp_train = Gt / lambda_const - (C_train @ Gt) / (
+            n_train * lambda_const
+        )
 
-        hvp_parts.append(hvp_val)
-        train_hvp_parts.append(hvp_train)
+        scores += hvp_val @ Gt.T
+        self_influence += (hvp_train * Gt).sum(dim=1)
 
-    H_val = torch.cat(hvp_parts, dim=1)
-    H_train = torch.cat(train_hvp_parts, dim=1)
-
-
-    scores = H_val @ G_train.T
-
-    self_influence = torch.abs(torch.diag(H_train @ G_train.T))
+        del Gt, Gv, C_val, C_train, hvp_val, hvp_train
 
     scores = scores / (
-        torch.sqrt(self_influence).unsqueeze(0) + 1e-12
+        torch.sqrt(torch.abs(self_influence)).unsqueeze(0) + 1e-12
     )
 
     print(f"scores shape: {scores.shape}")
     print(f"self_influence shape: {self_influence.shape}")
-
-    del H_val, hvp_parts
 
     df = pd.DataFrame(
         scores.detach().cpu().numpy(),
@@ -628,7 +599,7 @@ def l_RelatIF(
         dtype=float,
     )
 
-    del G_train, G_val, scores
+    del scores, self_influence
 
     if device.startswith("cuda"):
         torch.cuda.empty_cache()

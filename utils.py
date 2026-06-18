@@ -108,7 +108,10 @@ def template_setting(model_n):
             "{response}"
         )
 
-    elif model_n == "Qwen/Qwen2.5-3B-Instruct":
+    elif model_n in [
+        "Qwen/Qwen2.5-3B-Instruct",
+        "Qwen/Qwen3-4B-Instruct",
+    ]:
         chat_template = (
             "<|im_start|>user\n"
             "{prompt}<|im_end|>\n"
