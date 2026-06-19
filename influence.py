@@ -68,7 +68,7 @@ if __name__ == '__main__':
     dataset = load_from_disk("datasets/" + args.dataset)
 
     # results statistics directory
-    results_dir = "results"
+    results_dir = "results/json"
     os.makedirs(results_dir, exist_ok=True)
     metrics_filename = f"{args.dataset}_{args.model}_{args.inf_method}_metrics_results.json".replace(" ", "_")
     metrics_path = os.path.join(results_dir, metrics_filename)

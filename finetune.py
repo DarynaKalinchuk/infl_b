@@ -99,7 +99,7 @@ if __name__ == '__main__':
 
     model = get_peft_model(model, lora_config)
 
-    if args.model == "randomOlmo":
+    if "random" in args.model:
         model.save_pretrained(save_path)
         print(f"Model saved to: {save_path}")
         sys.exit()

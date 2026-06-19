@@ -8,6 +8,9 @@ import os
 import json
 from matplotlib import cm
 from matplotlib.colors import Normalize
+from pathlib import Path
+from matplotlib.ticker import PercentFormatter
+
 import pandas as pd
 from pathlib import Path
 from scipy.stats import gaussian_kde
@@ -79,13 +82,13 @@ def run_benchmark_measures(
     return metrics
 
 
-def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True):
+def generate_table_metrics(source_dir="results/json", results_dir = "results", figsize_scale=0.55, show=True):
 
-    if not os.path.exists(results_dir):
-        raise FileNotFoundError(f"Directory not found: {results_dir}")
+    if not os.path.exists(source_dir):
+        raise FileNotFoundError(f"Directory not found: {source_dir}")
 
     files = sorted(
-        f for f in os.listdir(results_dir)
+        f for f in os.listdir(source_dir)
         if f.endswith(".json")
     )
 
@@ -104,7 +107,7 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
         else:
             exp = stem
 
-        with open(os.path.join(results_dir, file)) as f:
+        with open(os.path.join(source_dir, file)) as f:
             grouped[group].append((exp, json.load(f)))
 
     metric_labels = ["Accuracy", "Coverage", "Runtime"]
@@ -203,6 +206,8 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
 
         plt.tight_layout()
 
+        os.makedirs(results_dir, exist_ok=True)
+
         output_path = os.path.join(
             results_dir,
             f"{group_key}_metrics_table.png"
@@ -224,55 +229,94 @@ def generate_table_metrics(results_dir="results", figsize_scale=0.55, show=True)
     return figures
 
 
-def generate_kde_plots(
+
+def generate_combined_plots(
     model_n="Olmo",
-    results_dir="results",
-    name_begin = "Backdoor_1",
-    include_methods=None,  # e.g. ["LiSSA", "BM25", "l-RelatIF"]
+    results_dir="results/distr_plots",
+    name_begin="Backdoor_1",
 ):
+
     cache_dir = Path("cache/" + model_n)
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
 
     files = sorted(cache_dir.glob(name_begin + "*.csv"))
 
-    plt.figure(figsize=(10, 6))
+    fig, axs = plt.subplots(1, 2, figsize=(14, 5))
+    ax_kde, ax_cov = axs
+
+    percentiles = np.array([0.01, 0.1, 0.2, 0.3, 0.4, 0.5])
 
     for file in files:
         method = file.stem.replace(name_begin, "")
 
-        if include_methods is not None and method not in include_methods:
+        # ignore
+        if method == "BM25":
             continue
 
         df = pd.read_csv(file, index_col=0)
+        X = df.to_numpy(dtype=float)
 
-        values = df.to_numpy(dtype=float).ravel()
+        values = X.ravel()
         values = values[np.isfinite(values)]
 
-        if len(values) < 2:
-            continue
+        if len(values) >= 2:
+            std = np.std(values, ddof=1)
+            if std > 0:
+                values = values / std
 
-        # Normalize by standard deviation only
-        std = np.std(values, ddof=1)
-        if std > 0:
-            values = values / std
+            kde = gaussian_kde(values)
+            x = np.linspace(values.min(), values.max(), 1000)
+            ax_kde.plot(x, kde(x), lw=2, label=method)
 
-        kde = gaussian_kde(values)
-        x = np.linspace(values.min(), values.max(), 1000)
 
-        plt.plot(x, kde(x), lw=2, label=method)
+            avg_coverage = []
 
-    plt.xlabel("Value / Std")
-    plt.ylabel("Density")
-    plt.title(name_begin + " KDE Comparison (Std-Normalized)")
-    plt.legend()
-    plt.tight_layout()
+            for p in percentiles:
+                row_coverages = []
 
-    output_path = results_dir / (name_begin + "_" + model_n + "_KDEs.png")
+                for row in X:
+                    row_sorted = np.sort(row)[::-1]
+
+                    total = row[row > 0].sum()
+                    if total == 0:
+                        continue
+
+                    k = max(1, int(np.ceil(p * len(row_sorted))))
+                    coverage = row_sorted[:k].clip(min=0).sum() / total
+                    row_coverages.append(coverage)
+
+                avg_coverage.append(
+                    np.mean(row_coverages) if row_coverages else np.nan
+                )
+
+            ax_cov.plot(percentiles, avg_coverage, marker="o", lw=2, label=method)
+
+    ax_kde.set_xlabel("Value / Std")
+    ax_kde.set_ylabel("Density")
+    ax_kde.set_title(f"{name_begin.split('_',1)[0]} {model_n} KDE Comparison")
+
+    ax_cov.set_xlabel("Top percentile")
+    ax_cov.set_ylabel("Average coverage of positive values")
+    ax_cov.set_title(f"{name_begin.split('_',1)[0]} {model_n} Coverage Comparison")
+    ax_cov.yaxis.set_major_formatter(PercentFormatter(1.0))
+    ax_cov.grid(True)
+
+    handles, labels = ax_kde.get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        ncol=min(len(labels), 5),
+        bbox_to_anchor=(0.5, -0.02),
+    )
+
+    plt.tight_layout(rect=[0, 0.08, 1, 1])
+
+    output_path = results_dir / f"{name_begin}_{model_n}_diagnostics.png"
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close()
+    plt.close(fig)
 
     print(f"Saved plot to: {output_path}")
 
     return output_path
-

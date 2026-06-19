@@ -753,7 +753,7 @@ def ekfac_influence_estimation(
 
     scores = analyzer.load_pairwise_scores(scores_name=factor_strategy)["all_modules"]
     print(f"Scores shape: {scores.shape}")
-    print(f"Saved to: {factor_strategy}")
+    print(f"Saved to: {output_dir}")
 
     return scores
 

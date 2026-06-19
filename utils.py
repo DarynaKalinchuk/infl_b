@@ -145,7 +145,7 @@ def template_setting(model_n):
         )
 
 
-    elif model_n == "randomLlama":
+    elif model_n == "randomLlama3":
 
         model_name = "meta-llama/Llama-3.2-3B-Instruct"
         chat_template = (
