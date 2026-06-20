@@ -54,7 +54,12 @@ while read -r DATASET_NAME; do
     while read -r INF_METHOD; do
         [ -z "$INF_METHOD" ] && continue
 
+        echo "DATASET_NAME = $DATASET_NAME"
         echo "INF_METHOD = $INF_METHOD"
+
+        METRICS_PATH="results/json/${DATASET_NAME}_${MODEL_NAME}_${INF_METHOD}_metrics_results.json"
+        SCORES_PATH="scores/${MODEL_NAME}/${DATASET_NAME}_${EPOCHS}${INF_METHOD}.csv"
+        RUNTIME_PATH="runtime_stats/${MODEL_NAME}/${DATASET_NAME}_${EPOCHS}${INF_METHOD}.txt"
 
         torchrun --standalone --nproc_per_node=1 influence.py \
             --model "$MODEL_NAME" \
@@ -62,7 +67,12 @@ while read -r DATASET_NAME; do
             --epochs "$EPOCHS" \
             --inf_method "$INF_METHOD" \
             --inf_args "$INF_ARGS" \
-            --max_length "$MAX_LENGTH"
+            --max_length "$MAX_LENGTH" \
+            --metrics_path "$METRICS_PATH" \
+            --scores_path "$SCORES_PATH" \
+            --runtime_path "$RUNTIME_PATH"
+
+        python3 -c "from postprocess_utils import run_benchmark_measures; run_benchmark_measures(metrics_path='$METRICS_PATH', method='$INF_METHOD', scores_path='$SCORES_PATH', runtime_path='$RUNTIME_PATH', dataset_path='datasets/$DATASET_NAME')"
 
     done < settings_txt/methods_to_run.txt
 

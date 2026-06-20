@@ -10,21 +10,36 @@ from matplotlib import cm
 from matplotlib.colors import Normalize
 from pathlib import Path
 from matplotlib.ticker import PercentFormatter
-
+from datasets import load_from_disk
 import pandas as pd
 from pathlib import Path
 from scipy.stats import gaussian_kde
 
 
 def run_benchmark_measures(
-    influence,
-    train_dataset,
-    validation_dataset,
     metrics_path,
-    time_elapsed,
+    method="random",
+    scores_path = "scores/..",
+    runtime_path = "runtime_stats/..",
+    dataset_path = "datasets/Backdoor",
+    field = "variation",
 ):
-    field = "variation"
+    if method == "random":
+        return None
 
+    dataset = load_from_disk(dataset_path)
+
+    train_dataset = dataset['train']
+    validation_dataset = dataset['test']
+
+    influence = pd.read_csv(scores_path)
+
+    time_elapsed = None
+    if runtime_path is not None and os.path.exists(runtime_path):
+        with open(runtime_path, "r") as f:
+            time_elapsed = float(f.read().strip())
+
+    
     if influence.shape != (len(validation_dataset), len(train_dataset)):
         raise ValueError(
             f"Expected shape {(len(validation_dataset), len(train_dataset))}, "
@@ -37,16 +52,22 @@ def run_benchmark_measures(
     train_class_counts = Counter(train_labels)
     n = len(validation_dataset)
 
-    overall = {"acc": 0, "cov": 0, "cov_den": 0}
+    overall = {"acc": 0, "cov": 0, "cov_den": 0, "sparsity5": 0}
 
     for i in range(n):
         val_label = validation_labels[i]
+        scores = influence.iloc[i].to_numpy()
+
+        # sparsity at 5% percentile
+        abs_scores = np.abs(scores)
+        total_sum = abs_scores.sum()
+        if total_sum > 0:
+            k5 = max(1, int(np.ceil(0.05 * len(abs_scores))))
+            top5_sum = np.partition(abs_scores, -k5)[-k5:].sum()
+            overall["sparsity5"] += top5_sum / total_sum
+        ############
 
         k = train_class_counts[val_label]
-        if k == 0:
-            continue
-
-        scores = influence.iloc[i].to_numpy()
 
         indices = np.argpartition(scores, -k)[-k:]
         topk = indices[np.argsort(scores[indices])[::-1]]
@@ -64,17 +85,21 @@ def run_benchmark_measures(
         overall["cov_den"] += k
 
     metrics = {
-        "time_elapsed": time_elapsed,
         "overall": {
             "variation": {
                 "accuracy": overall["acc"] / n,
                 "coverage": overall["cov"] / overall["cov_den"],
+                "sparsity@5": overall["sparsity5"] / n,
             }
         },
     }
 
-    print("Accuracy:", metrics["overall"]["variation"]["accuracy"])
-    print("Coverage:", metrics["overall"]["variation"]["coverage"])
+    if time_elapsed is not None:
+        metrics["time_elapsed"] = time_elapsed
+
+
+    print("Accuracy:", metrics["overall"][field]["accuracy"])
+    print("Coverage:", metrics["overall"][field]["coverage"])
 
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
@@ -110,7 +135,7 @@ def generate_table_metrics(source_dir="results/json", results_dir = "results", f
         with open(os.path.join(source_dir, file)) as f:
             grouped[group].append((exp, json.load(f)))
 
-    metric_labels = ["Accuracy", "Coverage", "Runtime"]
+    metric_labels = ["Accuracy", "Coverage", "Sparsity@5", "Runtime"]
     figures = {}
 
     for group_key, experiments in grouped.items():
@@ -130,7 +155,8 @@ def generate_table_metrics(source_dir="results/json", results_dir = "results", f
 
             values[exp_idx, 0] = vals.get("accuracy", np.nan)
             values[exp_idx, 1] = vals.get("coverage", np.nan)
-            values[exp_idx, 2] = metrics.get("time_elapsed", np.nan)
+            values[exp_idx, 2] = vals.get("sparsity@5", np.nan)
+            values[exp_idx, 3] = metrics.get("time_elapsed", np.nan)
 
         cmap = cm.get_cmap("RdYlGn")
         reverse_cmap = cm.get_cmap("RdYlGn_r")
@@ -153,7 +179,7 @@ def generate_table_metrics(source_dir="results/json", results_dir = "results", f
                     if np.isnan(v)
                     else (
                         reverse_cmap(col_norms[c](v))
-                        if c == 2
+                        if c == 3
                         else cmap(col_norms[c](v))
                     )
                     for c, v in enumerate(row)
@@ -169,7 +195,7 @@ def generate_table_metrics(source_dir="results/json", results_dir = "results", f
                     ""
                     if np.isnan(v)
                     else f"{v:.2f}s"
-                    if c == 2
+                    if c == 3
                     else f"{v * 100:.2f}%"
                     for c, v in enumerate(row)
                 ]
@@ -236,7 +262,7 @@ def generate_combined_plots(
     name_begin="Backdoor_1",
 ):
 
-    cache_dir = Path("cache/" + model_n)
+    cache_dir = Path("scores/" + model_n)
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
 

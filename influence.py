@@ -37,11 +37,12 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, required=True, help='dataset')
     parser.add_argument('--epochs', type=int, default=10, help='epochs')
     parser.add_argument('--inf_method', type=str, required=False, help='influence estimation method')
-    parser.add_argument('--max_length', type=int, default=128, help='tokenizer padding max length')
-    parser.add_argument('--lambda_c', type=float, default=10, help='lambda const')
-    parser.add_argument('--iter', type=int, default=3, help='#iteration')
-    parser.add_argument('--alpha', type=float, default=1., help='alpha_const')
     parser.add_argument('--inf_args', type=str, required=False, help='Other args, method-specific.')
+    parser.add_argument('--max_length', type=int, default=128, help='tokenizer padding max length')
+    parser.add_argument('--metrics_path', type=str, required=True, help='Metrics path.')
+    parser.add_argument('--scores_path', type=str, required=True, help='Scores path.')
+    parser.add_argument('--runtime_path', type=str, required=True, help='Runtime stats path.')
+
     args = parser.parse_args()
 
 
@@ -70,13 +71,11 @@ if __name__ == '__main__':
     # results statistics directory
     results_dir = "results/json"
     os.makedirs(results_dir, exist_ok=True)
-    metrics_filename = f"{args.dataset}_{args.model}_{args.inf_method}_metrics_results.json".replace(" ", "_")
-    metrics_path = os.path.join(results_dir, metrics_filename)
 
     start_time = time.time()
 
     if args.inf_method == "random":
-        random_influence_estimation(dataset = dataset, metrics_path = metrics_path)
+        random_influence_estimation(dataset = dataset, metrics_path = args.metrics_path)
 
         sys.exit()
 
@@ -224,12 +223,14 @@ if __name__ == '__main__':
 
     end_time = time.time()
 
-    cache_dir = 'cache/' + args.model + '/'
-    os.makedirs(cache_dir, exist_ok=True)
-    influence_inf.to_csv(cache_dir + args.dataset + '_' + str(args.epochs) + args.inf_method + '.csv', index_label=False)
-    run_benchmark_measures(influence = influence_inf, train_dataset = dataset['train'], 
-                  validation_dataset = dataset['test'], 
-                  metrics_path = metrics_path,
-                  time_elapsed = end_time - start_time)
-
+    os.makedirs(os.path.dirname(args.scores_path), exist_ok=True)
+    influence_inf.to_csv(args.scores_path, index_label=False)
+    
+    time_elapsed = end_time - start_time
+    os.makedirs(os.path.dirname(args.runtime_path), exist_ok=True)
+    with open(args.runtime_path, "w") as f:
+        f.write(str(time_elapsed))
+        
+    print(f"Influence scores saved to: {args.scores_path}")
+    print(f"Runtime statistics saved to: {args.runtime_path}")
 
