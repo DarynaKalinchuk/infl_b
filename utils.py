@@ -156,6 +156,16 @@ def template_setting(model_n):
             "{response}"
         )
 
+    elif model_n == "Olmo7":
+
+        model_name = "allenai/OLMo-2-1124-7B-Instruct"
+        chat_template = (
+            "<|user|>\n"
+            "{prompt}\n"
+            "<|assistant|>\n"
+            "{response}<|endoftext|>"
+        )
+
 
     else:
         raise ValueError(f"Chat template not defined in utils for model: {model_n}")
