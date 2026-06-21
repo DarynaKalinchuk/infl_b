@@ -1,7 +1,7 @@
 from datasets import load_from_disk
 from peft import LoraConfig, get_peft_model
 from utils import *
-from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments, BitsAndBytesConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments, BitsAndBytesConfig, EarlyStoppingCallback
 import argparse
 import warnings
 import os
@@ -57,7 +57,7 @@ if __name__ == '__main__':
 
     
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    tokenizer.padding_side = 'left'
+    tokenizer.padding_side = 'right'
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -66,7 +66,7 @@ if __name__ == '__main__':
     
     dataset = load_from_disk("datasets/" + args.dataset)
     train_dataset = get_preprocessed_dataset(tokenizer, dataset['train'], chat_template, max_length=args.max_length)  
-
+    eval_dataset = get_preprocessed_dataset(tokenizer, dataset['test'], chat_template, max_length=args.max_length)
     print(f"Training {args.model} for {args.epochs} epochs with batch size {args.batch_size}")
 
 
@@ -110,17 +110,23 @@ if __name__ == '__main__':
         per_device_train_batch_size=args.batch_size,
         num_train_epochs=args.epochs,
         logging_steps=args.logging_step,
-        save_steps=10,
+        save_steps=125,
         save_total_limit=10, # number of checkpoints
         remove_unused_columns=False,
-        learning_rate = 5e-5
+        learning_rate = 5e-5,
+        eval_steps=125,
+        eval_strategy="steps", 
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
     )
 
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        # eval_dataset=eval_dataset
+        eval_dataset=eval_dataset,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=5)],
     )
     
     trainer.train()

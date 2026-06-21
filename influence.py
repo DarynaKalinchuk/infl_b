@@ -59,7 +59,7 @@ if __name__ == '__main__':
     core_path = f"{args.model}/{args.dataset}_{args.epochs}"
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    tokenizer.padding_side = 'left'
+    tokenizer.padding_side = 'right'
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -105,10 +105,7 @@ if __name__ == '__main__':
         test_prompts=dataset["test"]["prompts"],
     )
 
-    else:
-
-        base_model = AutoModelForCausalLM.from_pretrained(model_name, 
-                                                      device_map='cuda')
+    elif args.inf_method == "EKFAC":
 
 
         tokenized_tr = get_preprocessed_dataset(
@@ -118,108 +115,129 @@ if __name__ == '__main__':
             tokenizer, dataset["test"], chat_template, max_length=args.max_length
         )
 
-                
-        if args.inf_method == "EKFAC":
-                
-                model = PeftModel.from_pretrained(
-                    base_model,
-                    "lora_adapter/" + core_path,
-                    is_trainable=True
-                )
 
-                model.config.use_cache = False
-                model.to("cuda")
-                
-                
-                scores = ekfac_influence_estimation(tokenizer,
-                                                    model,
-                                                    tokenized_tr,
-                                                    tokenized_val,
-                                                    output_dir="results/EKFAC",
-                                                    factor_strategy = "ekfac",
-                                                    target_modules = target_modules)
+        base_model = AutoModelForCausalLM.from_pretrained(model_name, 
+                                            device_map='cuda')
+        
+        model = PeftModel.from_pretrained(
+            base_model,
+            "lora_adapter/" + core_path,
+            is_trainable=True
+        )
 
-                influence_inf = pd.DataFrame(scores.detach().float().cpu().numpy())
+        model.config.use_cache = False
+        model.to("cuda")
+        
+        
+        scores = ekfac_influence_estimation(tokenizer,
+                                            model,
+                                            tokenized_tr,
+                                            tokenized_val,
+                                            output_dir="results/EKFAC",
+                                            factor_strategy = "ekfac",
+                                            target_modules = target_modules)
 
-            
-
-        elif "TracIn" in args.inf_method:
-
-            if "random" in args.model:
-                print("TracIn disabled for randomized models.")
-                sys.exit()
-
-            print(f"Calculating {args.inf_method}...")
-
-            ckpt_root = "lora_adapter/" + core_path
-
-            checkpoint_paths = sorted(
-                glob.glob(os.path.join(ckpt_root, "checkpoint-*")),
-                key=lambda x: int(x.split("-")[-1])
-            ) #[:1] #for testing just 1 check point
-
+        influence_inf = pd.DataFrame(scores.detach().float().cpu().numpy())
 
             
-            influence_inf = None
 
-            for ckpt_path in tqdm(checkpoint_paths, desc="Checkpoints"):
-                print(f"Collecting gradients for {ckpt_path}")
+    elif args.inf_method ==  "TracIn":
 
-                
-                model = PeftModel.from_pretrained(base_model, ckpt_path, is_trainable=True)
+        tokenized_tr = get_preprocessed_dataset(
+            tokenizer, dataset["train"], chat_template, max_length=args.max_length
+        )
+        tokenized_val = get_preprocessed_dataset(
+            tokenizer, dataset["test"], chat_template, max_length=args.max_length
+        )
 
-                model.config.use_cache = False
-                model.to("cuda")
+        if "random" in args.model:
+            print("TracIn disabled for randomized models.")
+            sys.exit()
 
-                tr_grad_dict, val_grad_dict = collect_gradient( 
-                    model,
-                    tokenizer,
-                    tokenized_tr,
-                    tokenized_val
-                )
+        print(f"Calculating {args.inf_method}...")
 
-                
-                adamw_optimizer_state = load_adamw_optimizer_state(model, ckpt_path)
+        ckpt_root = "lora_adapter/" + core_path
 
-
-                checkpoint_influence = TracIn(
-                    tr_grad_dict=tr_grad_dict,
-                    val_grad_dict=val_grad_dict,
-                    hyperparams={"adamw_optimizer_state": adamw_optimizer_state},
-                )
-
-                if influence_inf is None:
-                    influence_inf = checkpoint_influence
-                else:
-                    influence_inf += checkpoint_influence
-
-                del model
-                torch.cuda.empty_cache()
+        checkpoint_paths = sorted(
+            glob.glob(os.path.join(ckpt_root, "checkpoint-*")),
+            key=lambda x: int(x.split("-")[-1])
+        ) #[:1] #for testing just 1 check point
 
 
-        else:
+        
+        influence_inf = None
 
-            model = PeftModel.from_pretrained(
-                    base_model,
-                    "lora_adapter/" + core_path,
-                    is_trainable=True
-                )
+        for ckpt_path in tqdm(checkpoint_paths, desc="Checkpoints"):
+            print(f"Collecting gradients for {ckpt_path}")
+
+            base_model = AutoModelForCausalLM.from_pretrained(model_name, 
+                                            device_map='cuda')
+
+            
+            model = PeftModel.from_pretrained(base_model, ckpt_path, is_trainable=True)
 
             model.config.use_cache = False
             model.to("cuda")
 
-
-            tr_grad_dict, val_grad_dict = collect_gradient(model, tokenizer, tokenized_tr, tokenized_val)
-
-            inf_args_map = dict(
-            item.split('=') for item in (args.inf_args.split(',') if args.inf_args else [])
+            tr_grad_dict, val_grad_dict = collect_gradient( 
+                model,
+                tokenizer,
+                tokenized_tr,
+                tokenized_val
             )
 
-            method = globals()[args.inf_method]
+            
+            adamw_optimizer_state = load_adamw_optimizer_state(model, ckpt_path)
 
-            influence_inf = method(tr_grad_dict = tr_grad_dict, 
-                                    val_grad_dict = val_grad_dict,
-                                    hyperparams = inf_args_map)
+
+            checkpoint_influence = TracIn(
+                tr_grad_dict=tr_grad_dict,
+                val_grad_dict=val_grad_dict,
+                hyperparams={"adamw_optimizer_state": adamw_optimizer_state},
+            )
+
+            if influence_inf is None:
+                influence_inf = checkpoint_influence
+            else:
+                influence_inf += checkpoint_influence
+
+            del model, base_model, adamw_optimizer_state
+            torch.cuda.empty_cache()
+
+
+    else:
+
+        tokenized_tr = get_preprocessed_dataset(
+            tokenizer, dataset["train"], chat_template, max_length=args.max_length
+        )
+        tokenized_val = get_preprocessed_dataset(
+            tokenizer, dataset["test"], chat_template, max_length=args.max_length
+        )
+
+        base_model = AutoModelForCausalLM.from_pretrained(model_name, 
+                                            device_map='cuda')
+
+        model = PeftModel.from_pretrained(
+                base_model,
+                "lora_adapter/" + core_path,
+                is_trainable=True
+            )
+
+        model.config.use_cache = False
+        model.to("cuda")
+
+
+        tr_grad_dict, val_grad_dict = collect_gradient(model, tokenizer, tokenized_tr, tokenized_val)
+
+        inf_args_map = dict(
+        item.split('=') for item in (args.inf_args.split(',') if args.inf_args else [])
+        )
+
+        method = globals()[args.inf_method]
+
+        influence_inf = method(tr_grad_dict = tr_grad_dict, 
+                                val_grad_dict = val_grad_dict,
+                                hyperparams = inf_args_map)
 
     end_time = time.time()
 

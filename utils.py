@@ -76,6 +76,8 @@ def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
                 grad_dict[k] = v.grad.cpu()
             elif 'lora_B' in k:
                 grad_dict[k] = v.grad.cpu().T
+            elif 'modules_to_save.default.out_proj.weight' in k:
+                grad_dict[k] = v.grad.cpu()
             else: pass
         tr_grad_dict[step] = grad_dict
         del grad_dict
@@ -83,7 +85,8 @@ def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
     val_grad_dict = {}
     for step, batch in enumerate(tqdm(val_dataloader_stochastic)):
         model.zero_grad()
-        batch = {k: v.to("cuda") for k, v in batch.items()}
+        device = next(model.parameters()).device
+        batch = {k: v.to(device) for k, v in batch.items()}
         outputs = model(**batch)
         loss = outputs.loss
         loss.backward()
@@ -94,6 +97,8 @@ def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
                 grad_dict[k] = v.grad.cpu()
             elif 'lora_B' in k:
                 grad_dict[k] = v.grad.cpu().T
+            elif 'modules_to_save.default.out_proj.weight' in k:
+                grad_dict[k] = v.grad.cpu()
             else: pass
         val_grad_dict[step] = grad_dict    
         del grad_dict
@@ -110,7 +115,7 @@ def template_setting(model_n):
             "<|start_header_id|>user<|end_header_id|>\n"
             "{prompt}<|eot_id|>\n"
             "<|start_header_id|>assistant<|end_header_id|>\n"
-            "{response}"
+            "{response}<|eot_id|>"
         )
 
     elif model_n == "QWEN3":
@@ -153,7 +158,7 @@ def template_setting(model_n):
             "<|start_header_id|>user<|end_header_id|>\n"
             "{prompt}<|eot_id|>\n"
             "<|start_header_id|>assistant<|end_header_id|>\n"
-            "{response}"
+            "{response}<|eot_id|>"
         )
 
     elif model_n == "Olmo7":
