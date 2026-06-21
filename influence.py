@@ -54,7 +54,7 @@ if __name__ == '__main__':
         ]
 
     
-    chat_template, model_name = template_setting(args.model)
+    model_name = get_model_name(args.model)
 
     core_path = f"{args.model}/{args.dataset}_{args.epochs}"
 
@@ -100,7 +100,6 @@ if __name__ == '__main__':
         influence_inf = RepSim(
         model=model,
         tokenizer=tokenizer,
-        chat_template=chat_template,
         train_prompts=dataset["train"]["prompts"],
         test_prompts=dataset["test"]["prompts"],
     )
@@ -109,10 +108,10 @@ if __name__ == '__main__':
 
 
         tokenized_tr = get_preprocessed_dataset(
-            tokenizer, dataset["train"], chat_template, max_length=args.max_length
+            tokenizer, dataset["train"], max_length=args.max_length
         )
         tokenized_val = get_preprocessed_dataset(
-            tokenizer, dataset["test"], chat_template, max_length=args.max_length
+            tokenizer, dataset["test"], max_length=args.max_length
         )
 
 
@@ -144,10 +143,10 @@ if __name__ == '__main__':
     elif args.inf_method ==  "TracIn":
 
         tokenized_tr = get_preprocessed_dataset(
-            tokenizer, dataset["train"], chat_template, max_length=args.max_length
+            tokenizer, dataset["train"], max_length=args.max_length
         )
         tokenized_val = get_preprocessed_dataset(
-            tokenizer, dataset["test"], chat_template, max_length=args.max_length
+            tokenizer, dataset["test"], max_length=args.max_length
         )
 
         if "random" in args.model:
@@ -208,10 +207,10 @@ if __name__ == '__main__':
     else:
 
         tokenized_tr = get_preprocessed_dataset(
-            tokenizer, dataset["train"], chat_template, max_length=args.max_length
+            tokenizer, dataset["train"], max_length=args.max_length
         )
         tokenized_val = get_preprocessed_dataset(
-            tokenizer, dataset["test"], chat_template, max_length=args.max_length
+            tokenizer, dataset["test"], max_length=args.max_length
         )
 
         base_model = AutoModelForCausalLM.from_pretrained(model_name, 
@@ -251,4 +250,3 @@ if __name__ == '__main__':
         
     print(f"Influence scores saved to: {args.scores_path}")
     print(f"Runtime statistics saved to: {args.runtime_path}")
-

@@ -26,25 +26,46 @@ from kronfluence.utils.dataset import DataLoaderKwargs
 
 
 
-def get_preprocessed_dataset(tokenizer, dataset, chat_template, max_length):
+def get_preprocessed_dataset(tokenizer, dataset, max_length):
     def apply_prompt_template(sample):
-        return {
-            'text': chat_template.format(prompt=sample['prompts'], response=sample['response'])
-        }
-    dataset = dataset.map(apply_prompt_template, remove_columns=list(dataset.features))
-
-    def tokenized_dataset(text):
-        input_text = text['text']
-        tokenized_output = tokenizer(input_text, truncation=True, padding='max_length', max_length=max_length)
-        labels = tokenized_output["input_ids"].copy()
-        labels = [
-            [-100 if token == tokenizer.pad_token_id else token for token in row]
-            for row in labels
+        messages = [
+            {"role": "user", "content": sample["prompts"]},
+            {"role": "assistant", "content": sample["response"]},
         ]
-        tokenized_output["labels"] = labels
-        return tokenized_output
 
-    return dataset.map(tokenized_dataset, batched=True, remove_columns=['text'])
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+
+        return {"text": text}
+
+    dataset = dataset.map(
+        apply_prompt_template,
+        remove_columns=list(dataset.features)
+    )
+
+    def tokenized_dataset(batch):
+        tokenized = tokenizer(
+            batch["text"],
+            truncation=True,
+            padding="max_length",
+            max_length=max_length,
+        )
+
+        labels = [
+            [-100 if token == tokenizer.pad_token_id else token for token in ids]
+            for ids in tokenized["input_ids"]
+        ]
+        tokenized["labels"] = labels
+        return tokenized
+
+    return dataset.map(
+        tokenized_dataset,
+        batched=True,
+        remove_columns=["text"],
+    )
 
 
 
@@ -106,76 +127,43 @@ def collect_gradient(model, tokenizer, tokenized_tr, tokenized_val):
     return tr_grad_dict, val_grad_dict
 
 
-def template_setting(model_n):
+def get_model_name(model_n):
     if model_n == "Llama3":
 
         model_name = "meta-llama/Llama-3.2-3B-Instruct"
-        chat_template = (
-            "<|begin_of_text|>"
-            "<|start_header_id|>user<|end_header_id|>\n"
-            "{prompt}<|eot_id|>\n"
-            "<|start_header_id|>assistant<|end_header_id|>\n"
-            "{response}<|eot_id|>"
-        )
 
     elif model_n == "QWEN3":
 
         model_name = "Qwen/Qwen2.5-3B-Instruct"
-        chat_template = (
-            "<|im_start|>user\n"
-            "{prompt}<|im_end|>\n"
-            "<|im_start|>assistant\n"
-            "{response}<|im_end|>"
-        )
+       
     
     elif model_n == "QWEN4":
 
         model_name = "Qwen/Qwen3-4B-Instruct"
-        chat_template = (
-            "<|im_start|>user\n"
-            "{prompt}<|im_end|>\n"
-            "<|im_start|>assistant\n"
-            "{response}<|im_end|>"
-        )
+        
 
 
     elif model_n == "Olmo":
 
         model_name = "allenai/OLMo-2-0425-1B-SFT"
-        chat_template = (
-            "<|user|>\n"
-            "{prompt}\n"
-            "<|assistant|>\n"
-            "{response}<|endoftext|>"
-        )
+        
 
 
     elif model_n == "randomLlama3":
 
         model_name = "meta-llama/Llama-3.2-3B-Instruct"
-        chat_template = (
-            "<|begin_of_text|>"
-            "<|start_header_id|>user<|end_header_id|>\n"
-            "{prompt}<|eot_id|>\n"
-            "<|start_header_id|>assistant<|end_header_id|>\n"
-            "{response}<|eot_id|>"
-        )
+        
 
     elif model_n == "Olmo7":
 
         model_name = "allenai/OLMo-2-1124-7B-Instruct"
-        chat_template = (
-            "<|user|>\n"
-            "{prompt}\n"
-            "<|assistant|>\n"
-            "{response}<|endoftext|>"
-        )
+        
 
 
     else:
         raise ValueError(f"Chat template not defined in utils for model: {model_n}")
 
-    return chat_template, model_name
+    return model_name
 
 
 
@@ -314,4 +302,3 @@ class KronfluenceTask(Task):
             return batch["attention_mask"]
         return None  # Attention mask not used.
     
-

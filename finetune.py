@@ -53,7 +53,7 @@ if __name__ == '__main__':
 
 
     
-    chat_template, model_name = template_setting(args.model)
+    model_name = get_model_name(args.model)
 
     
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -65,12 +65,15 @@ if __name__ == '__main__':
 
     
     dataset = load_from_disk("datasets/" + args.dataset)
-    train_dataset = get_preprocessed_dataset(tokenizer, dataset['train'], chat_template, max_length=args.max_length)  
-    eval_dataset = get_preprocessed_dataset(tokenizer, dataset['test'], chat_template, max_length=args.max_length)
+    train_dataset = get_preprocessed_dataset(tokenizer, dataset['train'], max_length=args.max_length)  
+    # eval_dataset = get_preprocessed_dataset(tokenizer, dataset['test'], max_length=args.max_length)
     print(f"Training {args.model} for {args.epochs} epochs with batch size {args.batch_size}")
 
 
     save_path = f"lora_adapter/{args.model}/{args.dataset}_{args.epochs}"
+    # Deleting files in that dir if exist, not to accidentally take old checkpoint results			
+    if os.path.isdir(save_path):			
+        shutil.rmtree(save_path)
 
 
     quantization_config = BitsAndBytesConfig(load_in_8bit=True) if args.load_in_8bit else None
@@ -114,19 +117,19 @@ if __name__ == '__main__':
         save_total_limit=10, # number of checkpoints
         remove_unused_columns=False,
         learning_rate = 5e-5,
-        eval_steps=125,
-        eval_strategy="steps", 
-        load_best_model_at_end=True,
-        metric_for_best_model="eval_loss",
-        greater_is_better=False,
+        # eval_steps=125,
+        # eval_strategy="steps", 
+        # load_best_model_at_end=True,
+        # metric_for_best_model="eval_loss",
+        # greater_is_better=False,
     )
 
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=5)],
+        # eval_dataset=eval_dataset,
+        # callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
     )
     
     trainer.train()
@@ -136,4 +139,3 @@ if __name__ == '__main__':
     trainer.save_model(save_path)
     print(f"Model saved to: {save_path}")
     
-
