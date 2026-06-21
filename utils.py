@@ -26,25 +26,46 @@ from kronfluence.utils.dataset import DataLoaderKwargs
 
 
 
-def get_preprocessed_dataset(tokenizer, dataset, chat_template, max_length):
+def get_preprocessed_dataset(tokenizer, dataset, max_length):
     def apply_prompt_template(sample):
-        return {
-            'text': chat_template.format(prompt=sample['prompts'], response=sample['response'])
-        }
-    dataset = dataset.map(apply_prompt_template, remove_columns=list(dataset.features))
-
-    def tokenized_dataset(text):
-        input_text = text['text']
-        tokenized_output = tokenizer(input_text, truncation=True, padding='max_length', max_length=max_length)
-        labels = tokenized_output["input_ids"].copy()
-        labels = [
-            [-100 if token == tokenizer.pad_token_id else token for token in row]
-            for row in labels
+        messages = [
+            {"role": "user", "content": sample["prompts"]},
+            {"role": "assistant", "content": sample["response"]},
         ]
-        tokenized_output["labels"] = labels
-        return tokenized_output
 
-    return dataset.map(tokenized_dataset, batched=True, remove_columns=['text'])
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+
+        return {"text": text}
+
+    dataset = dataset.map(
+        apply_prompt_template,
+        remove_columns=list(dataset.features)
+    )
+
+    def tokenized_dataset(batch):
+        tokenized = tokenizer(
+            batch["text"],
+            truncation=True,
+            padding="max_length",
+            max_length=max_length,
+        )
+
+        labels = [
+            [-100 if token == tokenizer.pad_token_id else token for token in ids]
+            for ids in tokenized["input_ids"]
+        ]
+        tokenized["labels"] = labels
+        return tokenized
+
+    return dataset.map(
+        tokenized_dataset,
+        batched=True,
+        remove_columns=["text"],
+    )
 
 
 

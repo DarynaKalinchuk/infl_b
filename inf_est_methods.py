@@ -654,13 +654,12 @@ def BM25_scores(dataset):
 def RepSim(
     model,
     tokenizer,
-    chat_template,
     train_prompts,
     test_prompts,
     device="cuda"
 ):
 
-
+# needs fixing! just pass empty responses!
     chat_template = chat_template.replace("{response}", "")
 
     def get_hidden_states(prompts):
